@@ -454,21 +454,18 @@ class MessageHandler:
 
         # Resolve Core Member and Volunteer tags dynamically from guild
         tags = []
-        if message.guild:
-            core_role = discord.utils.find(
-                lambda r: r.name.lower() in ["core member", "core mem"], message.guild.roles
-            )
-            vol_role = discord.utils.find(
-                lambda r: r.name.lower() in ["volunteer", "voluntear"], message.guild.roles
-            )
-            if core_role:
-                tags.append(core_role.mention)
-            elif self.config.core_member_role_id:
-                tags.append(f"<@&{self.config.core_member_role_id}>")
+        if message.guild and hasattr(message.guild, "roles") and isinstance(message.guild.roles, (list, tuple)):
+            for r in message.guild.roles:
+                r_name = getattr(r, "name", "").lower()
+                if r_name in ["core member", "core mem"] and hasattr(r, "mention"):
+                    tags.append(r.mention)
+                elif r_name in ["volunteer", "voluntear"] and hasattr(r, "mention"):
+                    tags.append(r.mention)
 
-            if vol_role:
-                tags.append(vol_role.mention)
-            elif self.config.volunteer_role_id:
+        if not tags:
+            if self.config.core_member_role_id:
+                tags.append(f"<@&{self.config.core_member_role_id}>")
+            if self.config.volunteer_role_id:
                 tags.append(f"<@&{self.config.volunteer_role_id}>")
 
         if not tags:
