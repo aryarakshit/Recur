@@ -96,9 +96,9 @@ class MessageHandler:
 
         Rules:
         1. Always ignore bots (author.bot is True, bot_user, or name matching 'dyno').
-        2. If the user DIRECTLY mentioned the bot (@Recur), always allow it (allows organizers to test).
-        3. For ambient channel messages: ignore staff ('admin', 'core member', 'volunteer', 'judge', 'bot', 'dyno').
-        4. Only reply to participants with the 'Hacker' / 'Participant' role.
+        2. Never reply to staff / organizers (admin, administrator, moderator, core member, volunteer, judge, bot, dyno)
+           or users with administrator permissions.
+        3. Only reply to participants with the 'Hacker' / 'Participant' role.
         """
         if getattr(author, "bot", False) or author.id == bot_user.id:
             return False, "Author is a bot"
@@ -107,21 +107,21 @@ class MessageHandler:
         if "dyno" in author_name:
             return False, "Author is Dyno"
 
-        # Explicit @Recur mentions are always allowed for humans (allows admins/staff to test)
-        if is_direct_mention:
-            return True, "Direct mention to bot"
-
         # If in a guild (discord.Member), inspect roles and administrator permissions
         if hasattr(author, "roles"):
             role_names = [r.name.lower() for r in author.roles]
             perms = getattr(author, "guild_permissions", None)
-            is_admin = bool(perms and getattr(perms, "administrator", False)) or any("admin" in r for r in role_names)
-
-            # Admins are explicitly allowed so organizers can test and receive answers directly
+            is_admin = bool(perms and getattr(perms, "administrator", False)) or any(
+                "admin" in r or "administrator" in r for r in role_names
+            )
             if is_admin:
-                return True, "Author is an Admin"
+                return False, "Author has Administrator permissions or Admin role"
 
-            # Check for excluded staff roles (volunteer, judge, bot, dyno)
+            is_moderator = any("moderator" in r or "mod" in r for r in role_names)
+            if is_moderator:
+                return False, "Author has Moderator role"
+
+            # Check for excluded staff roles (core member, volunteer, judge, bot, dyno)
             for ex in self.config.excluded_role_names:
                 if any(ex in r for r in role_names):
                     return False, f"Author has excluded staff role '{ex}'"
@@ -134,6 +134,10 @@ class MessageHandler:
                 )
                 if not has_allowed:
                     return False, f"Author does not have required 'Hacker' role (roles: {role_names})"
+
+        # Explicit @Recur mentions for verified participants are allowed
+        if is_direct_mention:
+            return True, "Direct mention to bot"
 
         return True, "Author is a participant (Hacker)"
 

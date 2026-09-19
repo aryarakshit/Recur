@@ -93,6 +93,11 @@ def setup_commands(
         embed.add_field(name="KB Chunks", value=str(chunk_count), inline=True)
         embed.add_field(name="Last Rebuild", value=rebuild_str, inline=True)
         embed.add_field(
+            name="Moderator Mode",
+            value="🟢 Active (Admins & Moderators excluded from ambient replies)" if config.moderator_mode else "⚪ Inactive",
+            inline=False,
+        )
+        embed.add_field(
             name="API Key Configured",
             value="✅ Yes" if config.has_active_llm_key else "⚠️ Blank (Offline Mock Mode)",
             inline=False,

@@ -53,7 +53,7 @@ class Config:
     allowed_role_names: list[str] = field(
         default_factory=lambda: [
             r.strip().lower()
-            for r in os.getenv("ALLOWED_ROLES", "admin,administrator,hacker,hackers,participant,participants").split(",")
+            for r in os.getenv("ALLOWED_ROLES", "hacker,hackers,participant,participants").split(",")
             if r.strip()
         ]
     )
@@ -62,11 +62,15 @@ class Config:
             r.strip().lower()
             for r in os.getenv(
                 "EXCLUDED_ROLES",
-                "core member,core mem,volunteer,judge,bot,dyno",
+                "admin,administrator,moderator,mod,core member,core mem,volunteer,judge,bot,dyno",
             ).split(",")
             if r.strip()
         ]
     )
+    moderator_mode: bool = field(
+        default_factory=lambda: os.getenv("MODERATOR_MODE", "true").strip().lower() in ("true", "1", "yes")
+    )
+
 
     # LLM settings
     llm_provider: str = field(

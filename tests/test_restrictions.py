@@ -76,46 +76,60 @@ def test_author_allowed(message_handler):
     allowed, reason = message_handler._is_author_allowed(hacker, bot_user)
     assert allowed is True, f"Hacker should be allowed: {reason}"
 
-    # 2. Allowed: Admin
+    # 2. Excluded: Admin
     admin = make_member("sarah", ["Admin", "@everyone"])
     allowed, _ = message_handler._is_author_allowed(admin, bot_user)
-    assert allowed is True
+    assert allowed is False
 
-    # 3. Allowed: Administrator permission
+    # 3. Excluded: Administrator permission
     admin_perm = make_member("boss", ["Admin", "@everyone"], is_admin=True)
     allowed, _ = message_handler._is_author_allowed(admin_perm, bot_user)
-    assert allowed is True
+    assert allowed is False
 
-    # 4. Excluded: Core Member
+    # 4. Excluded: Moderator role
+    mod = make_member("alex_mod", ["Moderator", "@everyone"])
+    allowed, _ = message_handler._is_author_allowed(mod, bot_user)
+    assert allowed is False
+
+    # 5. Excluded: Core Member
     core_mem = make_member("john", ["Core Member", "@everyone"])
     allowed, _ = message_handler._is_author_allowed(core_mem, bot_user)
     assert allowed is False
 
-    # 5. Excluded: Volunteer
+    # 6. Excluded: Volunteer
     volunteer = make_member("emma", ["Volunteer", "@everyone"])
     allowed, _ = message_handler._is_author_allowed(volunteer, bot_user)
     assert allowed is False
 
-    # 6. Excluded: Judge
+    # 7. Excluded: Judge
     judge = make_member("dr_smith", ["Judge", "@everyone"])
     allowed, _ = message_handler._is_author_allowed(judge, bot_user)
     assert allowed is False
 
-    # 7. Excluded: Bot flag
+    # 8. Excluded: Bot flag
     other_bot = make_member("music_bot", ["Hacker"], is_bot=True)
     allowed, _ = message_handler._is_author_allowed(other_bot, bot_user)
     assert allowed is False
 
-    # 8. Excluded: Dyno
+    # 9. Excluded: Dyno
     dyno = make_member("Dyno", ["@everyone"])
     allowed, _ = message_handler._is_author_allowed(dyno, bot_user)
     assert allowed is False
 
-    # 9. Excluded: No Hacker role (unverified / spectator)
+    # 10. Excluded: No Hacker role (unverified / spectator)
     spectator = make_member("random_user", ["@everyone"])
     allowed, _ = message_handler._is_author_allowed(spectator, bot_user)
     assert allowed is False
 
-    # 10. Direct mention: Admin directly pinging @Recur -> Allowed!
+    # 11. Direct mention: Admin pinging @Recur -> Excluded!
     allowed, _ = message_handler._is_author_allowed(admin, bot_user, is_direct_mention=True)
+    assert allowed is False
+
+    # 12. Direct mention: Moderator pinging @Recur -> Excluded!
+    allowed, _ = message_handler._is_author_allowed(mod, bot_user, is_direct_mention=True)
+    assert allowed is False
+
+    # 13. Direct mention: Hacker pinging @Recur -> Allowed!
+    allowed, _ = message_handler._is_author_allowed(hacker, bot_user, is_direct_mention=True)
     assert allowed is True
+
