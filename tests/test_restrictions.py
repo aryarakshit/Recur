@@ -76,15 +76,15 @@ def test_author_allowed(message_handler):
     allowed, reason = message_handler._is_author_allowed(hacker, bot_user)
     assert allowed is True, f"Hacker should be allowed: {reason}"
 
-    # 2. Excluded: Admin
+    # 2. Allowed: Admin
     admin = make_member("sarah", ["Admin", "@everyone"])
     allowed, _ = message_handler._is_author_allowed(admin, bot_user)
-    assert allowed is False
+    assert allowed is True
 
-    # 3. Excluded: Administrator permission
-    admin_perm = make_member("boss", ["Hacker", "@everyone"], is_admin=True)
+    # 3. Allowed: Administrator permission
+    admin_perm = make_member("boss", ["Admin", "@everyone"], is_admin=True)
     allowed, _ = message_handler._is_author_allowed(admin_perm, bot_user)
-    assert allowed is False
+    assert allowed is True
 
     # 4. Excluded: Core Member
     core_mem = make_member("john", ["Core Member", "@everyone"])

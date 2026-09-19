@@ -114,13 +114,14 @@ class MessageHandler:
         # If in a guild (discord.Member), inspect roles and administrator permissions
         if hasattr(author, "roles"):
             role_names = [r.name.lower() for r in author.roles]
-
-            # Check for administrator permissions
             perms = getattr(author, "guild_permissions", None)
-            if perms and getattr(perms, "administrator", False):
-                return False, "Author has Administrator permissions (staff)"
+            is_admin = bool(perms and getattr(perms, "administrator", False)) or any("admin" in r for r in role_names)
 
-            # Check for excluded staff roles (admin, core member, volunteer, judge, bot, dyno)
+            # Admins are explicitly allowed so organizers can test and receive answers directly
+            if is_admin:
+                return True, "Author is an Admin"
+
+            # Check for excluded staff roles (volunteer, judge, bot, dyno)
             for ex in self.config.excluded_role_names:
                 if any(ex in r for r in role_names):
                     return False, f"Author has excluded staff role '{ex}'"

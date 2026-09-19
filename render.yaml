@@ -25,6 +25,6 @@ services:
       - key: ALLOWED_CHANNELS
         value: "general,ask-mentors"
       - key: ALLOWED_ROLES
-        value: "hacker"
+        value: "admin,administrator,hacker,hackers,participant,participants"
       - key: EXCLUDED_ROLES
-        value: "admin,administrator,core member,core mem,volunteer,judge,bot,dyno"
+        value: "core member,core mem,volunteer,judge,bot,dyno"
