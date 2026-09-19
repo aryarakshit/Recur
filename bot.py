@@ -35,6 +35,11 @@ logger = logging.getLogger("Recur")
 class HealthCheckHandler(BaseHTTPRequestHandler):
     """Minimal HTTP handler to satisfy Hugging Face Spaces & Render health checks."""
 
+    def do_HEAD(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+
     def do_GET(self) -> None:
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
