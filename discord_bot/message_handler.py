@@ -70,27 +70,35 @@ class MessageHandler:
         if not allowed:
             return True
 
-        # Check channel name (and parent channel name if inside a thread)
-        names = []
+        raw_names = []
         name = getattr(channel, "name", None)
         if name:
-            names.append(name.lower().lstrip("#"))
+            raw_names.append(name.lower())
         parent = getattr(channel, "parent", None)
         if parent and getattr(parent, "name", None):
-            names.append(parent.name.lower().lstrip("#"))
+            raw_names.append(parent.name.lower())
 
-        for n in names:
-            if n in allowed:
-                return True
+        for raw in raw_names:
+            clean = re.sub(r"[^a-z0-9\-]", "", raw).strip("-")
+            for al in allowed:
+                clean_al = re.sub(r"[^a-z0-9\-]", "", al.lower()).strip("-")
+                if clean == clean_al or clean_al in clean:
+                    return True
         return False
 
-    def _is_author_allowed(self, author: discord.User | discord.Member, bot_user: discord.ClientUser) -> tuple[bool, str]:
+    def _is_author_allowed(
+        self,
+        author: discord.User | discord.Member,
+        bot_user: discord.ClientUser,
+        is_direct_mention: bool = False,
+    ) -> tuple[bool, str]:
         """Checks if the message author is permitted to receive AI answers.
 
         Rules:
-        1. Ignore any bots (author.bot is True, bot_user, or name matching 'dyno').
-        2. Ignore staff/organizer roles: 'admin', 'core member', 'volunteer', 'judge', 'bot', 'dyno'.
-        3. Only reply to participants with the 'Hacker' role.
+        1. Always ignore bots (author.bot is True, bot_user, or name matching 'dyno').
+        2. If the user DIRECTLY mentioned the bot (@Recur), always allow it (allows organizers to test).
+        3. For ambient channel messages: ignore staff ('admin', 'core member', 'volunteer', 'judge', 'bot', 'dyno').
+        4. Only reply to participants with the 'Hacker' / 'Participant' role.
         """
         if getattr(author, "bot", False) or author.id == bot_user.id:
             return False, "Author is a bot"
@@ -99,6 +107,10 @@ class MessageHandler:
         if "dyno" in author_name:
             return False, "Author is Dyno"
 
+        # Explicit @Recur mentions are always allowed for humans (allows admins/staff to test)
+        if is_direct_mention:
+            return True, "Direct mention to bot"
+
         # If in a guild (discord.Member), inspect roles and administrator permissions
         if hasattr(author, "roles"):
             role_names = [r.name.lower() for r in author.roles]
@@ -106,17 +118,17 @@ class MessageHandler:
             # Check for administrator permissions
             perms = getattr(author, "guild_permissions", None)
             if perms and getattr(perms, "administrator", False):
-                return False, "Author has Administrator permissions"
+                return False, "Author has Administrator permissions (staff)"
 
-            # Check for excluded roles (admin, core member, volunteer, judge, bot, dyno)
+            # Check for excluded staff roles (admin, core member, volunteer, judge, bot, dyno)
             for ex in self.config.excluded_role_names:
                 if any(ex in r for r in role_names):
-                    return False, f"Author has excluded role '{ex}'"
+                    return False, f"Author has excluded staff role '{ex}'"
 
-            # Check for required 'Hacker' role
+            # Check for required 'Hacker' / 'Participant' role
             if self.config.allowed_role_names:
                 has_allowed = any(
-                    any(al == r or al in r for al in self.config.allowed_role_names)
+                    any(al in r for al in self.config.allowed_role_names)
                     for r in role_names
                 )
                 if not has_allowed:
@@ -126,22 +138,6 @@ class MessageHandler:
 
     async def handle_message(self, message: discord.Message, bot_user: discord.ClientUser) -> None:
         """Processes an incoming message and executes the response pipeline."""
-        # 1. Author & Role validation: Only reply to 'Hacker' (participants), ignore bots & staff
-        author_allowed, author_reason = self._is_author_allowed(message.author, bot_user)
-        if not author_allowed:
-            logger.info("Ignoring message from %s: %s", message.author, author_reason)
-            return
-
-        # 2. Channel validation: Only reply in 'general' and 'ask-mentors'
-        if not self._is_channel_allowed(message.channel):
-            channel_name = getattr(message.channel, "name", "DM")
-            logger.info(
-                "Ignoring message in non-allowed channel #%s (allowed: %s)",
-                channel_name,
-                self.config.allowed_channel_names,
-            )
-            return
-
         # Check if bot is directly mentioned
         is_mentioned = bot_user in message.mentions
 
@@ -159,6 +155,26 @@ class MessageHandler:
                     is_reply_to_bot = fetched_msg.author.id == bot_user.id
             except Exception as e:
                 logger.debug("Could not resolve referenced message: %s", e)
+
+        # 1. Author & Role validation: Only reply to 'Hacker' (participants), ignore bots & staff
+        author_allowed, author_reason = self._is_author_allowed(
+            author=message.author,
+            bot_user=bot_user,
+            is_direct_mention=is_mentioned or is_reply_to_bot,
+        )
+        if not author_allowed:
+            logger.info("Ignoring message from %s: %s", message.author, author_reason)
+            return
+
+        # 2. Channel validation: Only reply in 'general' and 'ask-mentors' (unless directly mentioned)
+        if not self._is_channel_allowed(message.channel) and not (is_mentioned or is_reply_to_bot):
+            channel_name = getattr(message.channel, "name", "DM")
+            logger.info(
+                "Ignoring message in non-allowed channel #%s (allowed: %s)",
+                channel_name,
+                self.config.allowed_channel_names,
+            )
+            return
 
         cleaned_text = self._clean_content(message, bot_user)
         if not cleaned_text:

@@ -115,3 +115,7 @@ def test_author_allowed(message_handler):
     spectator = make_member("random_user", ["@everyone"])
     allowed, _ = message_handler._is_author_allowed(spectator, bot_user)
     assert allowed is False
+
+    # 10. Direct mention: Admin directly pinging @Recur -> Allowed!
+    allowed, _ = message_handler._is_author_allowed(admin, bot_user, is_direct_mention=True)
+    assert allowed is True

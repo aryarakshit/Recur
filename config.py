@@ -53,7 +53,7 @@ class Config:
     allowed_role_names: list[str] = field(
         default_factory=lambda: [
             r.strip().lower()
-            for r in os.getenv("ALLOWED_ROLES", "hacker").split(",")
+            for r in os.getenv("ALLOWED_ROLES", "hacker,hackers,participant,participants").split(",")
             if r.strip()
         ]
     )
