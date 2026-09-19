@@ -1,3 +1,13 @@
+---
+title: Recur Discord Bot
+emoji: 🤖
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # RECURSIVE 2026 — Official Hackathon Discord AI Support Bot
 
 A production-grade, authoritative Discord AI support bot engineered for the **RECURSIVE 2026 Hackathon** (organized by the GNIT Kolkata ACM Student Chapter). Built with **Python 3.11+**, **discord.py**, **FAISS vector search**, and **Gemini / Groq LLMs**.

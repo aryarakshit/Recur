@@ -12,5 +12,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Ensure data directory exists and is writable
+RUN mkdir -p data && chmod -R 777 data
+
+# Hugging Face Spaces default port
+EXPOSE 7860
+
 # Start the Discord Bot
 CMD ["python", "bot.py"]

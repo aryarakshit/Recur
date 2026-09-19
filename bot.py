@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
+import threading
 import time
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import discord
 from discord.ext import commands
 
@@ -29,6 +32,30 @@ logging.basicConfig(
 logger = logging.getLogger("Recur")
 
 
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    """Minimal HTTP handler to satisfy Hugging Face Spaces & Render health checks."""
+
+    def do_GET(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"Recur Bot is running and healthy!\n")
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+def start_health_server() -> None:
+    port = int(os.getenv("PORT", "7860"))
+    try:
+        server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        logger.info("Health check server listening on 0.0.0.0:%d", port)
+    except Exception as e:
+        logger.warning("Could not bind health server on port %d: %s", port, e)
+
+
 def print_missing_token_guide() -> None:
     print("\n" + "=" * 65)
     print(" [!] DISCORD_TOKEN IS BLANK IN .env")
@@ -50,6 +77,9 @@ def print_missing_token_guide() -> None:
 
 def main() -> None:
     print("Initializing Hackathon Discord AI Agent...")
+
+    # Start lightweight health-check HTTP server for Hugging Face Spaces / Render
+    start_health_server()
 
     # Initialize SQLite Database & Metrics
     db = Database(config.database_path)
