@@ -77,6 +77,11 @@ class Config:
             if c.strip()
         ]
     )
+    team_finding_channel_id: int | None = field(
+        default_factory=lambda: int(os.getenv("TEAM_FINDING_CHANNEL_ID", "0"))
+        if os.getenv("TEAM_FINDING_CHANNEL_ID", "").strip().isdigit()
+        else None
+    )
 
 
     # LLM settings

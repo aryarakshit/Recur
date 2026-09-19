@@ -197,6 +197,104 @@ class MessageHandler:
 
         return True
 
+    def _get_team_finding_channel(self, guild: discord.Guild | None) -> discord.TextChannel | None:
+        """Finds the #find-your-team! text channel in the guild."""
+        if not guild:
+            return None
+
+        # Check configured channel ID first if available
+        team_channel_id = getattr(self.config, "team_finding_channel_id", None)
+        if team_channel_id:
+            ch = guild.get_channel(team_channel_id)
+            if isinstance(ch, discord.TextChannel):
+                return ch
+
+        target_names = getattr(self.config, "team_finding_channel_names", ["find-your-team", "find-your-team!"])
+        if not target_names:
+            target_names = ["find-your-team", "find-your-team!"]
+
+        text_channels = getattr(guild, "text_channels", [])
+        for channel in text_channels:
+            raw = getattr(channel, "name", "").lower()
+            clean = re.sub(r"[^a-z0-9\-]", "", raw).strip("-")
+            for target in target_names:
+                clean_target = re.sub(r"[^a-z0-9\-]", "", target.lower()).strip("-")
+                if clean == clean_target or clean_target in clean or clean in clean_target:
+                    return channel
+        return None
+
+    async def _forward_team_finding_message(self, message: discord.Message, clean_text: str) -> None:
+        """Forwards a teammate recruitment message from #general or #ask-mentors to #find-your-team!"""
+        # Cooldown check: prevent rapid @everyone spam from the same author (60s)
+        user_id = message.author.id
+        now = time.time()
+        last_ping = self.last_team_ping.get(user_id, 0.0)
+        if now - last_ping < 60.0:
+            logger.info("Skipping team recruitment forwarding for %s (user cooldown active)", message.author)
+            return
+
+        team_channel = self._get_team_finding_channel(message.guild)
+        if not team_channel:
+            logger.warning(
+                "Could not find team finding channel in guild '%s' to forward message from %s",
+                getattr(message.guild, "name", "None"),
+                message.author,
+            )
+            return
+
+        self.last_team_ping[user_id] = now
+        logger.info(
+            "Forwarding teammate request from %s in #%s to #%s",
+            message.author,
+            getattr(message.channel, "name", "channel"),
+            team_channel.name,
+        )
+
+        # Format blockquote for clean Discord embed/display
+        quoted_body = "\n".join(f"> {line}" for line in clean_text.splitlines() if line.strip())
+        jump_url = getattr(message, "jump_url", "")
+        jump_link_str = f"\n🔗 [Jump to Original Message]({jump_url})\n" if jump_url else "\n"
+        channel_mention = getattr(message.channel, "mention", f"#{getattr(message.channel, 'name', 'general')}")
+
+        forward_content = (
+            f"@everyone 📢 **Looking for Team Members!**\n"
+            f"**Participant**: {message.author.mention} (from {channel_mention})\n\n"
+            f"{quoted_body}\n"
+            f"{jump_link_str}"
+            f"Reply or DM {message.author.mention} if you want to team up! 🤝"
+        )
+
+        try:
+            await team_channel.send(
+                forward_content,
+                allowed_mentions=discord.AllowedMentions(everyone=True, users=True),
+            )
+        except discord.Forbidden:
+            logger.warning("Bot lacks 'Mention @everyone' permission in #%s", team_channel.name)
+            try:
+                await team_channel.send(
+                    forward_content,
+                    allowed_mentions=discord.AllowedMentions(everyone=False, users=True),
+                )
+            except Exception as e:
+                logger.error("Failed to send forward to #%s without @everyone: %s", team_channel.name, e)
+        except Exception as e:
+            logger.error("Failed to forward teammate recruitment message to #%s: %s", team_channel.name, e)
+
+        # Reply to the user in the original channel (#general or #ask-mentors)
+        source_ch_name = getattr(message.channel, "name", "chat")
+        reply_content = (
+            f"Hey {message.author.mention}, I've forwarded your teammate request to {team_channel.mention} with an @everyone notification! 🤝\n"
+            f"*(Please post future team recruitment messages in {team_channel.mention} to keep #{source_ch_name} focused on hackathon questions!)*"
+        )
+        try:
+            await message.reply(
+                reply_content,
+                allowed_mentions=discord.AllowedMentions(everyone=False, replied_user=True),
+            )
+        except Exception as e:
+            logger.error("Failed to reply to author in #%s: %s", getattr(message.channel, "name", "channel"), e)
+
     def _is_author_allowed(
         self,
         author: discord.User | discord.Member,
@@ -310,6 +408,11 @@ class MessageHandler:
 
         cleaned_text = self._clean_content(message, bot_user)
         if not cleaned_text:
+            return
+
+        # 4. If participant posted a teammate request in #general or #ask-mentors, forward it to #find-your-team! with @everyone
+        if self.classifier.is_teammate_search(cleaned_text):
+            await self._forward_team_finding_message(message, cleaned_text)
             return
 
         # Get recent channel context for ambiguous classifier decisions

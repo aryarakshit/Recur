@@ -219,3 +219,81 @@ async def test_team_finding_handler_replies_everyone():
     msg3.reply.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_forward_team_finding_message_from_general():
+    from unittest.mock import AsyncMock
+    from ai.classifier import MessageClassifier
+    from ai.provider import MockProvider
+
+    cfg = Config()
+    classifier = MessageClassifier(MockProvider())
+    handler = MessageHandler(
+        classifier=classifier,
+        generator=MagicMock(),
+        retriever=MagicMock(),
+        memory=MagicMock(),
+        database=MagicMock(),
+        config=cfg,
+    )
+
+    bot_user = MagicMock()
+    bot_user.id = 999999
+
+    # Mock channels
+    ch_general = MagicMock()
+    ch_general.name = "general"
+    ch_general.mention = "<#1111>"
+    ch_general.parent = None
+
+    ch_team = MagicMock()
+    ch_team.name = "find-your-team!"
+    ch_team.mention = "<#2222>"
+    ch_team.send = AsyncMock()
+
+    # Mock guild with both channels
+    guild = MagicMock()
+    guild.name = "Recursive Hackathon"
+    guild.text_channels = [ch_general, ch_team]
+
+    ch_general.guild = guild
+
+    # Member with Hacker role
+    role_hacker = MagicMock()
+    role_hacker.name = "Hacker"
+    author = MagicMock()
+    author.name = "rahul"
+    author.id = 55555
+    author.bot = False
+    author.mention = "<@55555>"
+    author.roles = [role_hacker]
+    author.guild_permissions.administrator = False
+
+    msg = MagicMock()
+    msg.channel = ch_general
+    msg.guild = guild
+    msg.author = author
+    msg.content = "Looking for two members to join my team. Frontend next.js, backend python. DM me!"
+    msg.mentions = []
+    msg.reference = None
+    msg.jump_url = "https://discord.com/channels/1/2/3"
+    msg.reply = AsyncMock()
+
+    # Process message in #general
+    await handler.handle_message(msg, bot_user)
+
+    # Assert forwarded to #find-your-team! with @everyone
+    ch_team.send.assert_called_once()
+    send_args, send_kwargs = ch_team.send.call_args
+    assert "@everyone" in send_args[0]
+    assert "<@55555>" in send_args[0]
+    assert "https://discord.com/channels/1/2/3" in send_args[0]
+    assert send_kwargs.get("allowed_mentions").everyone is True
+
+    # Assert author received a reply in #general
+    msg.reply.assert_called_once()
+    reply_args, _ = msg.reply.call_args
+    assert "<#2222>" in reply_args[0] or "find-your-team" in reply_args[0]
+    assert "<@55555>" in reply_args[0]
+
+
+
