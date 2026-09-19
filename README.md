@@ -377,3 +377,9 @@ Run static code analysis:
 ```bash
 python -m pyflakes .
 ```
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE) © 2026 GNIT Kolkata ACM Student Chapter.
