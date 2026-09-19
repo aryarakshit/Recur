@@ -71,10 +71,17 @@ class Config:
     )
 
     def __post_init__(self) -> None:
+        # Auto-detect provider if not explicitly specified via LLM_PROVIDER
+        if not os.getenv("LLM_PROVIDER"):
+            if self.groq_api_key and not self.gemini_api_key:
+                self.llm_provider = "groq"
+            elif self.gemini_api_key and not self.groq_api_key:
+                self.llm_provider = "gemini"
+
         # Default models based on provider if not specified
         if not self.llm_model:
             if self.llm_provider == "groq":
-                self.llm_model = "llama-3.3-70b-versatile"
+                self.llm_model = "qwen/qwen3.8-27b"
             else:
                 self.llm_model = "gemini-2.5-flash"
 

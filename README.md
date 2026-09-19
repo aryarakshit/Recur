@@ -253,7 +253,69 @@ python scripts/ask.py "How do I get to GNIT Kolkata campus from Sodepur station?
 
 ## 24/7 Production Deployment
 
-### Option 1: Docker & Docker Compose (Recommended)
+### Option 1: Render (24/7 Background Worker — Recommended Cloud Host)
+
+Deploy Recur to [Render](https://render.com) so it stays online 24/7 even when your laptop is turned off.
+
+#### 1. Push Your Code to GitHub (Private Repo)
+```bash
+git remote add origin https://github.com/<your-username>/Recur.git
+git branch -M main
+git push -u origin main
+```
+
+#### 2. Create Background Worker on Render
+1. Log in to [Render Dashboard](https://dashboard.render.com).
+2. Click **New +** $\rightarrow$ **Background Worker**.
+3. Connect your GitHub repository (`Recur`).
+4. Configure the service settings:
+   - **Name**: `recur-discord-bot`
+   - **Region**: Any (e.g. *Oregon (US West)* or *Frankfurt (EU)*)
+   - **Branch**: `main`
+   - **Root Directory**: *(leave blank)*
+   - **Runtime**: `Python`
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `python bot.py`
+
+#### 3. Add Environment Variables on Render
+Under the **Environment Variables** section, add:
+
+| Key | Value | Description |
+|---|---|---|
+| `DISCORD_TOKEN` | `MTU1MDc...` | Your bot token from Discord Developer Portal |
+| `LLM_PROVIDER` | `groq` | Active LLM provider (`groq` or `gemini`) |
+| `GROQ_API_KEY` | `gsk_...` | Your Groq API key |
+| `LLM_MODEL` | `qwen/qwen3.8-27b` | LLM model name |
+| `MAINTAINER_MENTION` | `@Core Member or @Volunteer` | Mention tag used in fallback responses |
+| `MAINTAINER_ROLE_ID` | `123456789...` | *(Optional)* Discord role ID to ping maintainers |
+| `GEMINI_API_KEY` | `AIzaSy...` | *(Optional)* Gemini API key if using Gemini |
+| `PYTHON_VERSION` | `3.11.9` | Locks Python version for binary wheel stability |
+
+#### 4. Deploy & Verify
+- Click **Create Background Worker**.
+- Render will automatically install dependencies, build the FAISS index on startup, and log:
+  ```text
+  [INFO] Recur: Recur is online.
+  [INFO] Recur: Connected to 1 guild(s): 'RECURSIVE GNIT ACM'
+  [INFO] Recur: Synced 6 slash commands across Discord.
+  [INFO] Recur: Bot is ready and listening for hackathon queries!
+  ```
+- Your bot is now running **24/7** in the cloud!
+
+#### 5. Updating Knowledge Files (`knowledge/*.md`)
+Whenever you update markdown documentation in `knowledge/`:
+1. Commit and push changes:
+   ```bash
+   git add knowledge/
+   git commit -m "docs: update hackathon schedule"
+   git push origin main
+   ```
+2. Render automatically triggers an auto-deploy, rebuilds the FAISS index on startup, and restarts with zero downtime!
+3. Alternatively, you can run `/reloadkb` directly in Discord without redeploying.
+
+---
+
+### Option 2: Docker & Docker Compose
 
 1. Make sure `.env` is configured with your `DISCORD_TOKEN` and API keys.
 2. Build and start the container in detached mode:

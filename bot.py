@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 import discord
 from discord.ext import commands
 
@@ -115,6 +116,7 @@ def main() -> None:
 
     @bot.event
     async def on_ready() -> None:
+        logger.info("Recur is online.")
         logger.info("Logged in as %s (ID: %s)", bot.user.name, bot.user.id)
         guilds = [f"'{g.name}' (ID: {g.id}, Members: {g.member_count})" for g in bot.guilds]
         logger.info("Connected to %d guild(s): %s", len(guilds), ", ".join(guilds) if guilds else "None")
@@ -131,24 +133,40 @@ def main() -> None:
         await bot.change_presence(activity=activity)
         logger.info("Bot is ready and listening for hackathon queries!")
 
-        for guild in bot.guilds:
-            logger.info("Examining channels in '%s':", guild.name)
-            for ch in guild.text_channels:
-                perms = ch.permissions_for(guild.me)
-                logger.info("  #%s: send_messages=%s, view_channel=%s", ch.name, perms.send_messages, perms.view_channel)
+    @bot.event
+    async def on_resumed() -> None:
+        logger.info("Discord session resumed successfully. Recur is online.")
+
+    @bot.event
+    async def on_disconnect() -> None:
+        logger.warning("Discord gateway disconnected. Reconnecting automatically...")
 
     @bot.event
     async def on_message(message: discord.Message) -> None:
-        channel_name = getattr(message.channel, "name", "DM")
-        logger.info("Message received in #%s from %s: '%s'", channel_name, message.author, message.content)
-        await message_handler.handle_message(message=message, bot_user=bot.user)
+        try:
+            channel_name = getattr(message.channel, "name", "DM")
+            logger.info("Message received in #%s from %s: '%s'", channel_name, message.author, message.content)
+            await message_handler.handle_message(message=message, bot_user=bot.user)
+        except Exception as e:
+            logger.error("Error processing message '%s': %s", getattr(message, "content", ""), e, exc_info=True)
 
-    try:
-        bot.run(config.discord_token)
-    except discord.errors.LoginFailure:
-        logger.critical("Failed to log in: Invalid DISCORD_TOKEN provided in .env")
-    except Exception as e:
-        logger.critical("Unexpected error while running bot: %s", e)
+    # Automatic reconnection loop
+    retry_delay = 5
+    while True:
+        try:
+            bot.run(config.discord_token, reconnect=True)
+            break
+        except discord.errors.LoginFailure:
+            logger.critical("Fatal: Invalid DISCORD_TOKEN provided. Please check environment variables.")
+            sys.exit(1)
+        except (discord.errors.GatewayNotFound, discord.errors.ConnectionClosed) as e:
+            logger.warning("Discord connection error: %s. Reconnecting in %ds...", e, retry_delay)
+            time.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, 60)
+        except Exception as e:
+            logger.error("Unexpected error in Discord bot runner: %s. Retrying in %ds...", e, retry_delay)
+            time.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, 60)
 
 
 if __name__ == "__main__":
