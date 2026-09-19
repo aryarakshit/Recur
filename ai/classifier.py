@@ -18,77 +18,38 @@ logger = logging.getLogger(__name__)
 
 # Common hackathon terms from specification
 HACKATHON_KEYWORDS = {
-    "hackathon",
-    "hack",
-    "registration",
-    "register",
-    "deadline",
-    "submission",
-    "submit",
-    "submitting",
-    "team",
-    "teams",
-    "teammate",
-    "solo",
-    "member",
-    "members",
-    "eligibility",
-    "eligible",
-    "prize",
-    "prizes",
-    "award",
-    "awards",
-    "bounty",
-    "judging",
-    "judge",
-    "judges",
-    "mentor",
-    "mentors",
-    "venue",
-    "schedule",
-    "timeline",
-    "problem statement",
-    "rules",
-    "rule",
-    "certificate",
-    "api",
-    "apis",
-    "project",
-    "demo",
-    "presentation",
-    "pitch",
-    "devpost",
-    "allowed",
-    "international",
-    "student",
-    "students",
-    "recursive",
-    "recur",
-    "gnit",
-    "sodepur",
-    "devfolio",
-    "food",
-    "wifi",
-    "sleep",
-    "sleeping",
-    "hardware",
-    "travel",
-    "offline",
-    "online",
-    "ppt",
-    "slides",
-    "website",
-    "site",
-    "link",
-    "links",
-    "url",
-    "portal",
-    "apply",
-    "template",
-    "form",
-    "docs",
-    "github",
-    "discord",
+    # Core event
+    "hackathon", "hack", "registration", "register", "registered", "registering",
+    "deadline", "submission", "submit", "submitting", "submitted",
+    "team", "teams", "teammate", "teammates", "solo", "member", "members",
+    "eligibility", "eligible", "prize", "prizes", "award", "awards",
+    "bounty", "bounties", "judging", "judge", "judges", "mentor", "mentors",
+    "venue", "schedule", "timeline", "problem statement", "rules", "rule",
+    "certificate", "certificates", "api", "apis", "project", "demo",
+    "presentation", "pitch", "devpost", "allowed", "international",
+    "student", "students", "recursive", "recur", "gnit", "sodepur", "devfolio",
+    "food", "wifi", "sleep", "sleeping", "hardware", "travel", "offline", "online",
+    "ppt", "slides", "website", "site", "link", "links", "url", "portal",
+    "apply", "applying", "template", "form", "docs", "github", "discord",
+    # Timing & Dates
+    "start", "starts", "starting", "begin", "begins", "end", "ends",
+    "timing", "timings", "duration", "hours", "october",
+    # Cost & Fees
+    "fee", "fees", "free", "cost", "pay", "payment", "charge", "charges", "price",
+    # Location & Transit
+    "location", "address", "reach", "campus", "college", "transport", "transit",
+    "station", "route", "bus", "auto", "train",
+    # Tracks & Topics
+    "track", "tracks", "theme", "themes", "topic", "topics", "domain", "domains",
+    # Swag & Amenities
+    "swag", "swags", "goodie", "goodies", "tshirt", "t-shirt", "merch", "lunch", "dinner",
+    "breakfast", "meal", "meals", "refreshment", "refreshments", "water", "snacks",
+    # Participant & Attendance
+    "attend", "attendance", "participate", "participation", "participant", "participants",
+    "laptop", "charger", "bring", "requirement", "requirements",
+    # Questions & Help
+    "help", "doubt", "doubts", "query", "queries", "question", "questions", "info", "information",
+    "details", "guidelines", "criteria",
 }
 
 # Casual chatter patterns to ignore
@@ -149,13 +110,17 @@ class MessageClassifier:
         if "problem statement" in clean:
             keyword_hits.add("problem statement")
 
-        is_question = "?" in clean or any(clean.startswith(w) for w in ["what", "when", "where", "how", "can", "is", "are", "who", "which", "give", "send", "share", "provide", "tell"])
+        is_question = "?" in clean or any(clean.startswith(w) for w in [
+            "what", "when", "where", "how", "can", "is", "are", "who", "which",
+            "give", "send", "share", "provide", "tell", "will", "does", "do",
+            "should", "could", "may"
+        ])
 
         # Check explicit resource/link request phrases
         if any(phrase in clean for phrase in ["website link", "site link", "official website", "hackathon link", "registration link", "apply link", "template link", "ppt link", "slides link", "discord link"]):
             return True
 
-        # Strong signal: has hackathon keywords and formatted as a question
+        # Strong signal: has hackathon keywords and formatted as a question or has 2+ keywords
         if keyword_hits and (is_question or len(keyword_hits) >= 2):
             return True
 
@@ -163,8 +128,8 @@ class MessageClassifier:
         if len(keyword_hits) >= 2:
             return True
 
-        # If very short message with 0 keywords, clearly chatter
-        if len(words) <= 4 and not keyword_hits:
+        # If very short message with 0 keywords, clearly chatter ONLY IF not formatted as a question
+        if len(words) <= 4 and not keyword_hits and not is_question:
             return False
 
         # Otherwise ambiguous: message might be a natural language question phrased uniquely

@@ -41,6 +41,11 @@ async def test_answers_clear_hackathon_questions_without_mention(classifier):
         "What is the maximum team size?",
         "Where can I find the submission deadline?",
         "What are the judging criteria and prizes?",
+        "is it free?",
+        "when does it start?",
+        "what are the tracks?",
+        "what is the campus address?",
+        "is food provided?",
     ]
     for q in test_questions:
         should_reply, _ = await classifier.should_reply(

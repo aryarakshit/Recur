@@ -180,7 +180,7 @@ class MessageHandler:
 
             # Send reply
             try:
-                await message.reply(answer, mention_author=False)
+                await message.reply(answer, mention_author=True)
                 logger.info("Successfully replied to %s in #%s", message.author, getattr(message.channel, "name", "channel"))
             except discord.Forbidden as e:
                 logger.error("Forbidden: bot lacks Send Messages/View Channel permission in #%s (%s)", getattr(message.channel, "name", "channel"), e)
