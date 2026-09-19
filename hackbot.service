@@ -1,0 +1,15 @@
+[Unit]
+Description=Recursive 2026 Hackathon Discord AI Support Bot
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Recur
+ExecStart=/home/ubuntu/Recur/venv/bin/python bot.py
+Restart=always
+RestartSec=10
+EnvironmentFile=/home/ubuntu/Recur/.env
+
+[Install]
+WantedBy=multi-user.target

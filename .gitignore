@@ -1,0 +1,31 @@
+# Environment and Secrets
+.env
+*.env.local
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Data and Indices
+data/*.index
+data/*.db
+data/*.sqlite3
+data/metadata.json
+data/*.log
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp

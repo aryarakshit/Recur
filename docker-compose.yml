@@ -1,0 +1,12 @@
+version: "3.8"
+
+services:
+  hackbot:
+    build: .
+    container_name: recur-hackbot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./knowledge:/app/knowledge

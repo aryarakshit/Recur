@@ -1,0 +1,235 @@
+"""Reply Decision Layer & Message Classifier.
+
+Implements the two-stage reply decision pipeline:
+1. Fast heuristic checks (keywords, patterns, greetings, emojis, noise)
+2. LLM classifier for ambiguous messages
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from ai.provider import LLMProvider
+
+logger = logging.getLogger(__name__)
+
+# Common hackathon terms from specification
+HACKATHON_KEYWORDS = {
+    "hackathon",
+    "hack",
+    "registration",
+    "register",
+    "deadline",
+    "submission",
+    "submit",
+    "submitting",
+    "team",
+    "teams",
+    "teammate",
+    "solo",
+    "member",
+    "members",
+    "eligibility",
+    "eligible",
+    "prize",
+    "prizes",
+    "award",
+    "awards",
+    "bounty",
+    "judging",
+    "judge",
+    "judges",
+    "mentor",
+    "mentors",
+    "venue",
+    "schedule",
+    "timeline",
+    "problem statement",
+    "rules",
+    "rule",
+    "certificate",
+    "api",
+    "apis",
+    "project",
+    "demo",
+    "presentation",
+    "pitch",
+    "devpost",
+    "allowed",
+    "international",
+    "student",
+    "students",
+    "recursive",
+    "recur",
+    "gnit",
+    "sodepur",
+    "devfolio",
+    "food",
+    "wifi",
+    "sleep",
+    "sleeping",
+    "hardware",
+    "travel",
+    "offline",
+    "online",
+    "ppt",
+    "slides",
+    "website",
+    "site",
+    "link",
+    "links",
+    "url",
+    "portal",
+    "apply",
+    "template",
+    "form",
+    "docs",
+    "github",
+    "discord",
+}
+
+# Casual chatter patterns to ignore
+NOISE_PATTERNS = [
+    r"^(\s*bro\s*|\s*dude\s*|\s*guys\s*|\s*yo\s*)*\s*(lol|lmao|haha|rofl|kek|xd)+\s*$",
+    r"^(hi|hello|hey|sup|gm|gn|good\s+morning|good\s+night|good\s+evening)\s*(!+|\.+)*$",
+    r"^(nice|cool|awesome|great|congrats|gg|rip|wow|super|agree|true|fr|ikr)\s*(!+|\.+)*$",
+    r"^<a?:[a-zA-Z0-9_]+:[0-9]+>$",  # Discord custom emoji
+    r"^[\U00010000-\U0010ffff\u2600-\u26ff\u2700-\u27bf\s]+$",  # Emoji-only strings
+    r"^(ok|okay|k|np|ty|thanks|thank you|welcome|sure|yep|nope|yes|no)\s*(!+|\.+)*$",
+]
+
+
+class MessageClassifier:
+    def __init__(self, llm_provider: LLMProvider) -> None:
+        self.llm_provider = llm_provider
+
+    def is_chatter(self, text: str) -> bool:
+        """Determines if the message is purely conversational noise/banter."""
+        clean = text.strip().lower()
+        if not clean:
+            return True
+
+        # Check noise regexes
+        for pat in NOISE_PATTERNS:
+            if re.match(pat, clean, re.IGNORECASE):
+                return True
+
+        # Check for message purely pinging another user with banter (e.g. "@Rahul check this", "look at this 😂")
+        if re.match(r"^<@!?[0-9]+>\s+(look\s+at\s+this|check\s+this|see\s+this|lol|haha)\b", clean):
+            return True
+
+        return False
+
+    def evaluate_heuristics(self, text: str) -> bool | None:
+        """Evaluates heuristic rules.
+
+        Returns:
+            True: Definite hackathon question
+            False: Definite chatter / unrelated
+            None: Ambiguous (defer to LLM)
+        """
+        clean = text.strip().lower()
+
+        # 1. Definite chatter check
+        if self.is_chatter(clean):
+            return False
+
+        # Identity questions directed at the bot
+        if re.search(r"\b(who\s+are\s+you|what\s+are\s+you|who\s+is\s+recur|what\s+is\s+recur|tell\s+me\s+about\s+yourself|introduce\s+yourself)\b", clean):
+            return True
+
+        # 2. Extract words and check keyword overlap
+        words = set(re.findall(r"\b[a-z0-9_]+\b", clean))
+        keyword_hits = words.intersection(HACKATHON_KEYWORDS)
+
+        # Also check for multi-word keywords like 'problem statement'
+        if "problem statement" in clean:
+            keyword_hits.add("problem statement")
+
+        is_question = "?" in clean or any(clean.startswith(w) for w in ["what", "when", "where", "how", "can", "is", "are", "who", "which", "give", "send", "share", "provide", "tell"])
+
+        # Check explicit resource/link request phrases
+        if any(phrase in clean for phrase in ["website link", "site link", "official website", "hackathon link", "registration link", "apply link", "template link", "ppt link", "slides link", "discord link"]):
+            return True
+
+        # Strong signal: has hackathon keywords and formatted as a question
+        if keyword_hits and (is_question or len(keyword_hits) >= 2):
+            return True
+
+        # If it has strong keywords even without question mark (e.g., "submission deadline", "team size limit")
+        if len(keyword_hits) >= 2:
+            return True
+
+        # If very short message with 0 keywords, clearly chatter
+        if len(words) <= 4 and not keyword_hits:
+            return False
+
+        # Otherwise ambiguous: message might be a natural language question phrased uniquely
+        return None
+
+    async def should_reply(
+        self,
+        content: str,
+        is_bot_mentioned: bool,
+        is_reply_to_bot: bool,
+        context: Optional[str] = None,
+    ) -> tuple[bool, str]:
+        """Main reply decision pipeline matching Section 5 specifications.
+
+        Returns:
+            (should_reply: bool, reason: str)
+        """
+        # Rule 1 & 2: Direct mention or reply to bot -> Always answer
+        if is_bot_mentioned:
+            return True, "Bot directly mentioned"
+
+        if is_reply_to_bot:
+            return True, "Reply to bot message"
+
+        # Rule 3: Fast heuristic check
+        heuristic_result = self.evaluate_heuristics(content)
+        if heuristic_result is True:
+            return True, "Hackathon question identified by heuristic"
+        if heuristic_result is False:
+            return False, "Filtered out by noise/heuristic filter"
+
+        # Rule 4: Ambiguous message -> Query LLM classifier
+        logger.info("Message is ambiguous ('%s'). Calling LLM classifier.", content)
+        try:
+            res = await self.llm_provider.classify(message=content, context=context)
+            should = bool(res.get("should_reply", False))
+            confidence = float(res.get("confidence", 0.0))
+            reason = res.get("reason", "LLM classification")
+            logger.info("LLM Classifier result: should_reply=%s, confidence=%.2f, reason=%s", should, confidence, reason)
+            return should, f"LLM Classifier ({reason})"
+        except Exception as e:
+            logger.error("Error in LLM classifier: %s", e)
+            return False, f"LLM Classifier error: {e}"
+
+    async def is_hackathon_related(self, content: str, context: Optional[str] = None) -> bool:
+        """Determines if a question or message is genuinely related to this hackathon.
+
+        Returns True if related to the hackathon; False if off-topic, general knowledge,
+        chatter, or unrelated banter.
+        """
+        clean = content.strip().lower()
+        if not clean or self.is_chatter(clean):
+            return False
+
+        # Fast heuristic check
+        h = self.evaluate_heuristics(clean)
+        if h is True:
+            return True
+        if h is False:
+            return False
+
+        # Ambiguous message: query LLM classifier
+        try:
+            res = await self.llm_provider.classify(message=clean, context=context)
+            return bool(res.get("should_reply", False))
+        except Exception as e:
+            logger.error("Error evaluating is_hackathon_related: %s", e)
+            return False
