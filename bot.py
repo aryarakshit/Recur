@@ -56,6 +56,31 @@ def start_health_server() -> None:
         logger.warning("Could not bind health server on port %d: %s", port, e)
 
 
+def start_keep_alive() -> None:
+    """Sends a periodic HTTP GET request to the public URL to prevent Render from idling/sleeping."""
+    import urllib.request
+
+    def _ping_loop() -> None:
+        url = os.getenv("RENDER_EXTERNAL_URL")
+        if not url:
+            return
+        logger.info("Render external URL detected: %s. Starting keep-alive self-ping loop.", url)
+        # Wait 3 minutes after startup before first ping
+        time.sleep(180)
+        while True:
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "RecurKeepAlive/1.0"})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    logger.info("Keep-alive ping to %s succeeded (HTTP %d)", url, resp.status)
+            except Exception as e:
+                logger.debug("Keep-alive ping to %s: %s", url, e)
+            # Sleep 9 minutes (Render idle timeout is 15 minutes)
+            time.sleep(540)
+
+    thread = threading.Thread(target=_ping_loop, daemon=True)
+    thread.start()
+
+
 def print_missing_token_guide() -> None:
     print("\n" + "=" * 65)
     print(" [!] DISCORD_TOKEN IS BLANK IN .env")
@@ -80,6 +105,7 @@ def main() -> None:
 
     # Start lightweight health-check HTTP server for Hugging Face Spaces / Render
     start_health_server()
+    start_keep_alive()
 
     # Initialize SQLite Database & Metrics
     db = Database(config.database_path)
