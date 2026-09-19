@@ -21,7 +21,7 @@ from discord_bot.message_handler import MessageHandler
 from rag.indexer import KnowledgeIndexer
 from rag.retriever import KnowledgeRetriever
 from rag.live_sync import LiveWebSync
-from database.db import Database
+from storage.database import Database
 from storage.memory import ConversationMemory
 
 # Configure logging

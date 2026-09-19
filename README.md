@@ -50,59 +50,62 @@ Recur/
 ├── bot.py                     # Main Discord bot entrypoint & slash command sync
 ├── config.py                  # Dataclass configuration & .env loader
 ├── requirements.txt           # Python dependencies
+├── render.yaml                # Render 24/7 Web Service blueprint
 ├── Dockerfile                 # Container image specification
 ├── docker-compose.yml         # Container orchestration
-├── hackbot.service            # Systemd service unit template
+├── discloud.config            # Discloud bot configuration
+├── .discloudignore            # Discloud build ignore list
 ├── .env.example               # Environment variable template
 ├── .env                       # Local secrets (gitignored)
 ├── .gitignore
 ├── README.md
+├── LICENSE
 │
 ├── ai/                        # AI & LLM integration layer
-│   ├── classifier.py          # Heuristics & LLM message classifier (YES/NO)
-│   ├── embeddings.py          # Gemini & Local sub-word embedding providers
-│   ├── generator.py           # Grounded prompt synthesis & safe fallback policy
+│   ├── classifier.py          # Situational intelligence & heuristics classifier
+│   ├── embeddings.py          # Gemini & local embedding providers
+│   ├── generator.py           # Grounded prompt synthesis & situational guidance
 │   └── provider.py            # LLMProvider abstraction (Gemini, Groq, Mock)
 │
 ├── discord_bot/               # Discord UI & interaction layer
 │   ├── commands.py            # Slash commands (/status, /reloadkb, /ask, etc.)
-│   ├── message_handler.py     # Channel message listener & role-based dispatcher
+│   ├── message_handler.py     # Message listener, channel filter & dispatcher
 │   └── permissions.py         # Admin, Core Member & Volunteer role validators
 │
-├── knowledge/                 # Official hackathon knowledge base (.md & .pdf)
-│   ├── rules.md               # Team limits, eligibility, code conduct
-│   ├── schedule.md            # Timeline, round deadlines, demo day
-│   ├── submission.md          # Idea submission process & Devfolio instructions
-│   ├── prizes.md              # Cash prizes, track awards, sponsor perks
-│   ├── judging.md             # Evaluation criteria and weights
-│   ├── faq.md                 # 10 official Q&As from recursiveacm.in
-│   ├── venue.md               # GNIT Kolkata address, transit from Sodepur station
-│   ├── chair.md               # Hackathon chair lore and origins
-│   ├── problem-statements.md  # 6 hackathon tracks & problem statements
-│   ├── technology-rules.md    # Allowed tech stacks, libraries, templates
-│   ├── sponsors.md            # Partners & sponsors
-│   ├── contacts.md            # Contact info & social links
-│   └── links.md               # Official Devfolio, Google Slides & GitHub links
+├── storage/                   # Unified persistence & memory package
+│   ├── database.py            # SQLite engine (unanswered queries, metrics, logs)
+│   └── memory.py              # Sliding-window conversation history manager
 │
-├── rag/                       # RAG indexing & retrieval pipeline
+├── rag/                       # RAG indexing, live web sync & retrieval
 │   ├── indexer.py             # Markdown + PDF chunker & FAISS builder
+│   ├── live_sync.py           # Live web sync for Devfolio & recursiveacm.in
 │   ├── retriever.py           # Vector similarity search & context formatting
 │   └── models.py              # DocumentChunk & RetrievalResult data models
 │
-├── database/                  # SQLite persistence engine
-│   └── db.py                  # Unanswered questions, conversation history, metrics
+├── knowledge/                 # Official hackathon knowledge base (.md files)
+│   ├── rules.md               # Team limits, eligibility, code conduct
+│   ├── schedule.md            # Timeline, round deadlines, demo day
+│   ├── submission.md          # Idea submission process & last-minute policy
+│   ├── prizes.md              # Cash prizes, track awards, sponsor perks
+│   ├── judging.md             # Evaluation criteria and weights
+│   ├── faq.md                 # 10 official Q&As from recursiveacm.in
+│   ├── live_updates.md        # Real-time updates synced from Devfolio portal
+│   └── ...                    # Venue, problem statements, sponsors, etc.
 │
-├── storage/                   # Storage & memory wrappers
-│   ├── database.py            # Database client alias
-│   └── memory.py              # Sliding-window conversation manager
+├── deploy/                    # Deployment templates
+│   └── hackbot.service        # Systemd service unit template for Linux/EC2
 │
-├── scripts/                   # CLI maintenance tools
-│   ├── index_knowledge.py     # Build or rebuild FAISS index from knowledge/
-│   ├── rebuild_index.py       # Re-indexer alias
-│   └── ask.py                 # Test Q&A pipeline directly in terminal
+├── docs/                      # Documentation & specifications
+│   └── BUILD_SPEC.md          # Comprehensive architecture & build specification
 │
-└── tests/                     # Automated test suite (17 unit tests)
-    ├── test_decision_layer.py # Heuristics & classifier tests
+├── scripts/                   # CLI maintenance & test tools
+│   ├── rebuild_index.py       # Canonical script to build/rebuild FAISS index
+│   └── ask.py                 # Interactive terminal Q&A test tool
+│
+└── tests/                     # Automated test suite (34 unit tests)
+    ├── test_decision_layer.py # Heuristics, peer chat, mentor address tests
+    ├── test_restrictions.py   # Roles, ambient suppression, team-finding tests
+    ├── test_live_sync.py      # Live web syncing & context attachment tests
     ├── test_provider.py       # Provider fallback & generation tests
     ├── test_rag.py            # Indexer & retrieval threshold tests
     └── test_storage.py        # SQLite history & logging tests
@@ -219,16 +222,16 @@ The bot answers queries using files in `knowledge/`. Both **Markdown (`.md`)** a
 ### Indexing Knowledge Files
 Run the indexing script:
 ```bash
-python scripts/index_knowledge.py
+python scripts/rebuild_index.py
 ```
 *Output:*
 ```text
-Indexed 15 files into 51 chunks. Saved index to data/faiss.index
+Indexed 16 files (56 chunks). Saved index to data/faiss.index
 ```
 
 ### Adding New Documentation
 1. Place any new `.md` or `.pdf` file into `knowledge/` (e.g. `knowledge/sponsor-bounties.pdf`).
-2. Run `python scripts/index_knowledge.py`, or simply type `/reloadkb` in Discord!
+2. Run `python scripts/rebuild_index.py`, or simply type `/reloadkb` in Discord!
 
 ---
 
@@ -349,11 +352,11 @@ docker compose down
 cd /home/ubuntu/Recur
 python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt
-python scripts/index_knowledge.py
+python scripts/rebuild_index.py
 ```
 2. Copy the unit file:
 ```bash
-sudo cp hackbot.service /etc/systemd/system/hackbot.service
+sudo cp deploy/hackbot.service /etc/systemd/system/hackbot.service
 ```
 3. Enable and start:
 ```bash
