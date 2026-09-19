@@ -106,3 +106,62 @@ async def test_ignores_teammate_recruitment_and_lfg(classifier):
             is_reply_to_bot=False,
         )
         assert should_reply is False, f"Erroneously replied to teammate search: '{msg}' (Reason: {reason})"
+
+
+@pytest.mark.asyncio
+async def test_ignores_messages_addressed_to_mentors_and_staff(classifier):
+    # Actual user/participant messages addressed to human staff
+    mentor_messages = [
+        "Mentors, as today is the last day of submission. Me and my team are still working on the prototype of the idea we've been trying to build and would submit it with the ppt itself. So if we submit the ppt at the very last minute, will that anyhow affect on our selection process? Please do let us know.",
+        "Mentors: can someone please review our circuit diagram?",
+        "Hey mentors, are you available for a quick doubt?",
+        "Hi mentor, quick question about our database structure",
+        "Judges, will we be presenting on our laptops or the lab PCs?",
+        "Core team, when will dinner be served tonight?",
+        "Organizers, where can we get the WiFi credentials?",
+        "Can any mentor check our backend repo?",
+        "Sir, can you please approve our team?",
+        "Anyone from the core team available?",
+    ]
+    for msg in mentor_messages:
+        should_reply, reason = await classifier.should_reply(
+            content=msg,
+            is_bot_mentioned=False,
+            is_reply_to_bot=False,
+        )
+        assert should_reply is False, f"Erroneously replied to message addressed to humans: '{msg}' (Reason: {reason})"
+        assert "human" in reason.lower() or "filter" in reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_answers_when_bot_is_mentioned_even_if_mentors_addressed(classifier):
+    # If the user explicitly mentions @Recur, the bot should always answer
+    msg = "Mentors, as today is the last day of submission. If we submit at the very last minute, will it affect our selection?"
+    should_reply, reason = await classifier.should_reply(
+        content=msg,
+        is_bot_mentioned=True,
+        is_reply_to_bot=False,
+    )
+    assert should_reply is True
+    assert "mentioned" in reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_does_not_ignore_objective_questions_about_mentors(classifier):
+    # Objective questions about mentors/judging rules should NOT be ignored as addressed to humans
+    rule_questions = [
+        "Who are the mentors?",
+        "What are the judging criteria?",
+        "Can mentors participate in the hackathon?",
+        "Are mentors provided during the hackathon?",
+        "Will there be judges for each track?",
+    ]
+    for q in rule_questions:
+        assert classifier.is_addressed_to_human(q) is False, f"Question falsely classified as addressed to human: '{q}'"
+        should_reply, reason = await classifier.should_reply(
+            content=q,
+            is_bot_mentioned=False,
+            is_reply_to_bot=False,
+        )
+        assert should_reply is True, f"Failed to answer objective question: '{q}' (Reason: {reason})"
+

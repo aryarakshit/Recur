@@ -501,6 +501,16 @@ class MessageHandler:
                     retrieved_sources=sources,
                 )
 
+                # Ambient suppression: If the bot was NOT directly mentioned or replied to,
+                # stay quiet! Do not spam #general or #ask-mentors with robotic fallback messages.
+                if not (is_mentioned or is_reply_to_bot):
+                    logger.info(
+                        "Suppressed fallback reply in ambient chat (#%s) for '%s' (staying quiet)",
+                        getattr(message.channel, "name", "channel"),
+                        cleaned_text,
+                    )
+                    return
+
             # Send reply
             try:
                 await message.reply(answer, mention_author=True)

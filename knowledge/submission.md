@@ -39,3 +39,11 @@ Your deck must strictly follow this sequence:
 4. Solutions must be 100% original.
 5. Remove Slide 9 (Guidelines) before final export.
 6. Submit strictly in PDF format.
+
+## Submission Timing, Last-Minute Submissions & Selection Process
+- **Equal Evaluation for All Submissions**: All applications and PPT submissions submitted on Devfolio before the official deadline cutoff are evaluated equally by the review committee.
+- **Does Last-Minute Submission Affect Selection?**: No. Submitting at the very last minute will **not** negatively impact your evaluation score, ranking, or selection chances. Submissions are judged purely on the four core criteria: Technical Depth, Problem Innovation, Design & UX Craft, and Live Demo Quality.
+- **Portal Congestion Advisory**: Although submitting near the deadline has no penalty on scoring, teams are strongly encouraged to submit at least 15 to 30 minutes before the cutoff to avoid potential Devfolio upload lag, high server traffic, or last-minute network issues.
+- **Working Prototypes with PPT**: Teams are encouraged to work on prototypes! Including links to a working prototype, GitHub repository, Figma design, or demo video inside your slide deck (especially on Slides 4 and 5) is welcomed and demonstrates strong technical depth and execution feasibility.
+- **Official Extensions**: Any official deadline extensions will be updated directly on the Devfolio portal (https://recursiveacm.devfolio.co) and announced in official Discord channels.
+

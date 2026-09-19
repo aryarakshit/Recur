@@ -296,4 +296,128 @@ async def test_forward_team_finding_message_from_general():
     assert "<@55555>" in reply_args[0]
 
 
+@pytest.mark.asyncio
+async def test_suppresses_fallback_response_in_ambient_chat():
+    from unittest.mock import AsyncMock, MagicMock
+    from ai.classifier import MessageClassifier
+    from ai.provider import MockProvider
+
+    cfg = Config()
+    classifier = MessageClassifier(MockProvider())
+    mock_generator = MagicMock()
+    # Generator returns fallback (not found in KB)
+    mock_generator.generate_answer = AsyncMock(
+        return_value=(
+            "I couldn't find this information in the official hackathon knowledge base. Please tag @Core Member or @Volunteer for clarification.",
+            True,  # was_fallback
+        )
+    )
+
+    mock_db = MagicMock()
+    mock_db.log_unanswered_question = MagicMock()
+
+    handler = MessageHandler(
+        classifier=classifier,
+        generator=mock_generator,
+        retriever=MagicMock(),
+        memory=MagicMock(),
+        database=mock_db,
+        config=cfg,
+    )
+
+    bot_user = MagicMock()
+    bot_user.id = 999999
+
+    ch_general = MagicMock()
+    ch_general.name = "general"
+    ch_general.parent = None
+
+    role_hacker = MagicMock()
+    role_hacker.name = "Hacker"
+    author = MagicMock()
+    author.name = "participant1"
+    author.id = 11111
+    author.bot = False
+    author.roles = [role_hacker]
+    author.guild_permissions.administrator = False
+
+    msg = MagicMock()
+    msg.channel = ch_general
+    msg.guild = None
+    msg.author = author
+    # Ambiguous/ambient question where bot was NOT tagged
+    msg.content = "What is the exact room number for the robotics track?"
+    msg.mentions = []
+    msg.reference = None
+    msg.reply = AsyncMock()
+
+    await handler.handle_message(msg, bot_user)
+
+    # Question should be logged for organizers
+    mock_db.log_unanswered_question.assert_called_once()
+
+    # BUT reply should be suppressed (bot stays quiet in ambient chat!)
+    msg.reply.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_replies_fallback_when_directly_mentioned():
+    from unittest.mock import AsyncMock, MagicMock
+    from ai.classifier import MessageClassifier
+    from ai.provider import MockProvider
+
+    cfg = Config()
+    classifier = MessageClassifier(MockProvider())
+    mock_generator = MagicMock()
+    mock_generator.generate_answer = AsyncMock(
+        return_value=(
+            "I couldn't find this information in the official hackathon knowledge base. Please tag @Core Member or @Volunteer for clarification.",
+            True,  # was_fallback
+        )
+    )
+
+    mock_db = MagicMock()
+    handler = MessageHandler(
+        classifier=classifier,
+        generator=mock_generator,
+        retriever=MagicMock(),
+        memory=MagicMock(),
+        database=mock_db,
+        config=cfg,
+    )
+
+    bot_user = MagicMock()
+    bot_user.id = 999999
+
+    ch_general = MagicMock()
+    ch_general.name = "general"
+    ch_general.parent = None
+
+    role_hacker = MagicMock()
+    role_hacker.name = "Hacker"
+    author = MagicMock()
+    author.name = "participant1"
+    author.id = 11111
+    author.bot = False
+    author.roles = [role_hacker]
+    author.guild_permissions.administrator = False
+
+    msg = MagicMock()
+    msg.channel = ch_general
+    msg.guild = None
+    msg.author = author
+    # Directly mentioning the bot: <@999999>
+    msg.content = "<@999999> What is the exact room number for robotics?"
+    msg.mentions = [bot_user]
+    msg.reference = None
+    msg.reply = AsyncMock()
+
+    await handler.handle_message(msg, bot_user)
+
+    # When directly mentioned, fallback reply SHOULD be sent to the user
+    msg.reply.assert_called_once()
+    assert "couldn't find" in msg.reply.call_args[0][0].lower()
+
+
+
 

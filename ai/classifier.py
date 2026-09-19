@@ -138,12 +138,63 @@ class MessageClassifier:
 
         return False
 
+    def is_addressed_to_human(self, text: str) -> bool:
+        """Detects if message is addressed specifically to human mentors, judges, or organizers.
+
+        Examples:
+        - "Mentors, as today is the last day of submission..."
+        - "Mentors: can you please check our project?"
+        - "Hey mentors, are you available?"
+        - "Hi mentor, quick question about our circuit diagram"
+        - "Judges, will we be presenting on our laptops?"
+        - "Core team, is food provided tonight?"
+        - "Organizers, where can we get the WiFi credentials?"
+        - "Can any mentor check our backend repo?"
+        """
+        clean = text.strip().lower()
+        if not clean:
+            return False
+
+        # 1. Starting with greeting + staff role e.g. "hey mentors", "hi mentor", "hello judges", "dear organizers"
+        if re.search(
+            r"^\s*(?:hey|hi|hello|dear)\s+(?:mentors?|judges?|organizers?|core\s*(?:team|members?)|volunteers?|admins?|mods?|moderators?|sir|ma'?am)\b",
+            clean,
+        ):
+            return True
+
+        # 2. Starting with staff role directly addressed with punctuation or addressing pronouns:
+        # e.g. "Mentors, as today is...", "Mentors: can we...", "Mentors please...", "Judges, ..."
+        if re.search(
+            r"^\s*(?:mentors?|judges?|organizers?|core\s*(?:team|members?)|volunteers?|admins?|sir|ma'?am)\s*[,:]",
+            clean,
+        ):
+            return True
+
+        if re.search(
+            r"^\s*(?:mentors?|judges?|organizers?)\s+(?:please|kindly|can|could|would|as\b|we\b|i\b|our\b|my\b)",
+            clean,
+        ):
+            return True
+
+        # 3. Direct request to mentors/judges in chat:
+        # e.g. "can any mentor help", "could a mentor review", "anyone from core team"
+        if re.search(
+            r"\b(?:can|could|would)\s+(?:any\s+)?(?:mentor|mentors|judge|judges|organizer|organizers)\s+(?:help|assist|check|review|guide|clarify|answer|tell|look)\b",
+            clean,
+        ):
+            return True
+
+        if re.search(r"\b(?:anyone\s+from\s+(?:the\s+)?(?:core\s*team|mentors|organizers|judges))\b", clean):
+            return True
+
+        return False
+
     def evaluate_heuristics(self, text: str) -> bool | None:
         """Evaluates heuristic rules.
 
         Returns:
             True: Definite hackathon question
-            False: Definite chatter / unrelated / teammate search
+            False: Definite chatter / unrelated / teammate search / addressed to human staff
             None: Ambiguous (defer to LLM classifier to understand what participant wants)
         """
         clean = text.strip().lower()
@@ -155,6 +206,11 @@ class MessageClassifier:
         # 2. Definite teammate search / peer recruiting check
         if self.is_teammate_search(clean):
             return False
+
+        # 3. Definite address to human mentors/judges/staff
+        if self.is_addressed_to_human(clean):
+            return False
+
 
         # Identity questions directed at the bot
         if re.search(r"\b(who\s+are\s+you|what\s+are\s+you|who\s+is\s+recur|what\s+is\s+recur|tell\s+me\s+about\s+yourself|introduce\s+yourself)\b", clean):
@@ -216,12 +272,17 @@ class MessageClassifier:
         if is_reply_to_bot:
             return True, "Reply to bot message"
 
+        # Check if message is addressed specifically to human mentors/staff (stay quiet!)
+        if self.is_addressed_to_human(content):
+            return False, "Message addressed to human mentors/staff"
+
         # Rule 3: Fast heuristic check
         heuristic_result = self.evaluate_heuristics(content)
         if heuristic_result is True:
             return True, "Hackathon question identified by heuristic"
         if heuristic_result is False:
             return False, "Filtered out by noise/heuristic filter"
+
 
         # Rule 4: Ambiguous message -> Query LLM classifier
         logger.info("Message is ambiguous ('%s'). Calling LLM classifier.", content)
