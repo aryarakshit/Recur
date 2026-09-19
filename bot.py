@@ -20,6 +20,7 @@ from discord_bot.commands import setup_commands
 from discord_bot.message_handler import MessageHandler
 from rag.indexer import KnowledgeIndexer
 from rag.retriever import KnowledgeRetriever
+from rag.live_sync import LiveWebSync
 from database.db import Database
 from storage.memory import ConversationMemory
 
@@ -136,6 +137,14 @@ def main() -> None:
         indexer.build_index()
         retriever.load()
 
+    # Initialize Live Web Sync for Devfolio and recursiveacm.in
+    live_sync = LiveWebSync(
+        knowledge_dir=config.knowledge_dir,
+        indexer=indexer,
+        retriever=retriever,
+    )
+    live_sync.start_periodic_sync(interval_seconds=900)
+
     # Initialize LLM & Decision Pipeline
     llm_provider = get_llm_provider(config)
     classifier = MessageClassifier(llm_provider=llm_provider)
@@ -143,6 +152,7 @@ def main() -> None:
         llm_provider=llm_provider,
         default_organizer_channel=config.organizer_channel_name,
         classifier=classifier,
+        live_sync=live_sync,
     )
     memory = ConversationMemory(db=db, max_history_turns=6)
     message_handler = MessageHandler(
@@ -174,6 +184,7 @@ def main() -> None:
         generator=generator,
         database=db,
         config=config,
+        live_sync=live_sync,
     )
 
     @bot.event

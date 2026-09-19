@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime
 import logging
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 import discord
 from discord import app_commands
 
@@ -27,6 +27,7 @@ def setup_commands(
     generator: AnswerGenerator,
     database: Database,
     config: Config,
+    live_sync: Any | None = None,
 ) -> None:
     """Registers slash commands on the Discord command tree."""
 
@@ -41,6 +42,9 @@ def setup_commands(
 
         await interaction.response.defer(ephemeral=True)
         try:
+            if live_sync:
+                live_sync.sync(force=True)
+
             stats = indexer.build_index()
             # Reload retriever index in memory
             retriever.load()
@@ -62,6 +66,33 @@ def setup_commands(
         except Exception as e:
             logger.error("Error during /reloadkb: %s", e)
             await interaction.followup.send(f"❌ Failed to reload knowledge base: {e}", ephemeral=True)
+
+    @tree.command(name="syncweb", description="Fetch latest live updates from Devfolio & official website (Organizer only)")
+    async def syncweb_command(interaction: discord.Interaction) -> None:
+        if not is_organizer(interaction.user, config.admin_role_id):
+            await interaction.response.send_message(
+                "❌ This command is restricted to hackathon organizers.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            if live_sync:
+                updated, content = live_sync.sync(force=True)
+                embed = discord.Embed(
+                    title="🌐 Live Web Sources Synced",
+                    description="Successfully fetched live data from **Devfolio** (`https://recursiveacm.devfolio.co`) and **Official Website** (`https://recursiveacm.in`).",
+                    color=discord.Color.green(),
+                )
+                embed.add_field(name="KB Updated", value="✅ Yes (Re-indexed)" if updated else "⚪ No changes detected", inline=True)
+                embed.add_field(name="Live Preview", value=content[:350] + "...", inline=False)
+                await interaction.followup.send(embed=embed, ephemeral=True)
+            else:
+                await interaction.followup.send("⚠️ Live web sync is not initialized.", ephemeral=True)
+        except Exception as e:
+            logger.error("Error during /syncweb: %s", e)
+            await interaction.followup.send(f"❌ Failed to sync web sources: {e}", ephemeral=True)
 
     @tree.command(name="status", description="Check bot status, LLM configuration, and knowledge base metrics")
     async def status_command(interaction: discord.Interaction) -> None:
