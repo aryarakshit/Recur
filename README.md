@@ -22,6 +22,7 @@ The bot acts as an official, hallucination-free hackathon assistant that reads m
 - **Safe Maintainer Fallback**: If an inquiry cannot be answered with official context, the bot states:
   > *"I couldn't find this information in the official hackathon knowledge base. Please tag @Core Member or @Volunteer for clarification."*
   Dynamic role tagging automatically resolves the server's actual `@Core Member` and `@Volunteer` roles and logs the unanswered question into SQLite for organizers to review.
+- **Inline Replies & Participant Mentions**: Replies directly to the participant's original message in Discord with active user mentions (`@User`), ensuring the user who asked receives an immediate notification badge and ping.
 - **Two-Stage Reply Decision Layer**:
   1. *Direct Mentions & Replies*: Always answered.
   2. *Fast Heuristic & Noise Filter*: Keyword recognition for hackathon inquiries, immediate silence on memes, greetings, bot commands, and casual chat.
@@ -263,24 +264,24 @@ python scripts/ask.py "How do I get to GNIT Kolkata campus from Sodepur station?
 
 ## 24/7 Production Deployment
 
-### Option 1: Render (24/7 Background Worker — Recommended Cloud Host)
+### Option 1: Render (24/7 Free Web Service — $0/month)
 
 Deploy Recur to [Render](https://render.com) so it stays online 24/7 even when your laptop is turned off.
 
-#### 1. Push Your Code to GitHub (Private Repo)
+#### 1. Push Your Code to GitHub
 ```bash
-git remote add origin https://github.com/<your-username>/Recur.git
+git remote add origin https://github.com/aryarakshit/Recur.git
 git branch -M main
 git push -u origin main
 ```
 
-#### 2. Create Background Worker on Render
+#### 2. Create Web Service on Render
 1. Log in to [Render Dashboard](https://dashboard.render.com).
-2. Click **New +** $\rightarrow$ **Background Worker**.
-3. Connect your GitHub repository (`Recur`).
+2. Click **New +** $\rightarrow$ **Web Service** *(choose Web Service for the 100% Free tier)*.
+3. Connect your GitHub repository (`aryarakshit/Recur`).
 4. Configure the service settings:
    - **Name**: `recur-discord-bot`
-   - **Region**: Any (e.g. *Oregon (US West)* or *Frankfurt (EU)*)
+   - **Instance Type**: **Free ($0/month)**
    - **Branch**: `main`
    - **Root Directory**: *(leave blank)*
    - **Runtime**: `Python`
