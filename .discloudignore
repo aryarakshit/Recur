@@ -1,0 +1,12 @@
+.git
+.pytest_cache
+__pycache__
+*.pyc
+tests
+Dockerfile
+docker-compose.yml
+hackbot.service
+render.yaml
+data/*.index
+data/*.db
+data/*.json
