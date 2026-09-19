@@ -84,13 +84,60 @@ class MessageClassifier:
 
         return False
 
+    def is_teammate_search(self, text: str) -> bool:
+        """Detects peer-to-peer teammate recruitment, finding teammates, and LFG messages."""
+        clean = text.strip().lower()
+
+        # Questions about official rules or limits are NOT teammate searches
+        # e.g. "What is the team size limit?", "Can I participate solo?"
+        if any(clean.startswith(q) for q in ["what", "can", "is", "are", "how", "where"]):
+            if any(term in clean for term in ["limit", "maximum", "rule", "rules", "allowed", "allow", "size", "solo", "minimum"]):
+                return False
+
+        patterns = [
+            # Looking for members / teammates
+            r"\blooking\s+for\s+.*(member|members|teammate|teammates|dev|developer|partner|team|group|person|people)\b",
+            # Looking to join a team
+            r"\blooking\s+to\s+join\s+.*team\b",
+            # Need member / teammates
+            r"\bneed\s+.*(member|members|teammate|teammates|frontend|backend|dev|designer)\b",
+            # Join my / our team
+            r"\bjoin\s+(my|our)\s+team\b",
+            # Interested kindly reply / dm / pm
+            r"\b(interested\s+.*(dm|pm|reply|ping)|reply\s+or\s+dm|dm\s+me|pm\s+me|ping\s+me|contact\s+me)\b",
+            # Team formation inquiries to peers: anyone want to join / team up
+            r"\banyone\s+(want|wanna|interested)\s+(to\s+)?(join|team\s+up|partner)\b",
+            # LFG / spots left
+            r"\b(lfg|spots?\s+(available|left|open)|slots?\s+(available|left|open))\b",
+            # Domains / roles available for team recruitment
+            r"\bdomains?\s*[-:]\s*.*(ai|frontend|backend|web|app)\b",
+            r"\bavailable\s+.*(domain|domains|role|roles|slot|slots|spot|spots)\b",
+        ]
+        for pat in patterns:
+            if re.search(pat, clean):
+                return True
+
+        # Check combination of peer recruitment signals
+        recruiting_signals = 0
+        if any(w in clean for w in ["looking for", "need", "require", "searching for", "join"]):
+            recruiting_signals += 1
+        if any(w in clean for w in ["team", "teammate", "teammates", "member", "members"]):
+            recruiting_signals += 1
+        if any(w in clean for w in ["dm", "pm", "reply", "interested", "available", "domains", "frontend", "backend"]):
+            recruiting_signals += 1
+
+        if recruiting_signals >= 3:
+            return True
+
+        return False
+
     def evaluate_heuristics(self, text: str) -> bool | None:
         """Evaluates heuristic rules.
 
         Returns:
             True: Definite hackathon question
-            False: Definite chatter / unrelated
-            None: Ambiguous (defer to LLM)
+            False: Definite chatter / unrelated / teammate search
+            None: Ambiguous (defer to LLM classifier to understand what participant wants)
         """
         clean = text.strip().lower()
 
@@ -98,15 +145,23 @@ class MessageClassifier:
         if self.is_chatter(clean):
             return False
 
+        # 2. Definite teammate search / peer recruiting check
+        if self.is_teammate_search(clean):
+            return False
+
         # Identity questions directed at the bot
         if re.search(r"\b(who\s+are\s+you|what\s+are\s+you|who\s+is\s+recur|what\s+is\s+recur|tell\s+me\s+about\s+yourself|introduce\s+yourself)\b", clean):
             return True
 
-        # 2. Extract words and check keyword overlap
+        # Check explicit resource/link request phrases
+        if any(phrase in clean for phrase in ["website link", "site link", "official website", "hackathon link", "registration link", "apply link", "template link", "ppt link", "slides link", "discord link"]):
+            return True
+
+        # Extract words and check keyword overlap
         words = set(re.findall(r"\b[a-z0-9_]+\b", clean))
         keyword_hits = words.intersection(HACKATHON_KEYWORDS)
 
-        # Also check for multi-word keywords like 'problem statement'
+        # Multi-word keywords
         if "problem statement" in clean:
             keyword_hits.add("problem statement")
 
@@ -116,23 +171,23 @@ class MessageClassifier:
             "should", "could", "may"
         ])
 
-        # Check explicit resource/link request phrases
-        if any(phrase in clean for phrase in ["website link", "site link", "official website", "hackathon link", "registration link", "apply link", "template link", "ppt link", "slides link", "discord link"]):
+        # Strong signal: has hackathon keywords AND formatted as an inquiry/question
+        if keyword_hits and is_question:
             return True
 
-        # Strong signal: has hackathon keywords and formatted as a question or has 2+ keywords
-        if keyword_hits and (is_question or len(keyword_hits) >= 2):
-            return True
-
-        # If it has strong keywords even without question mark (e.g., "submission deadline", "team size limit")
-        if len(keyword_hits) >= 2:
+        # Explicit short query phrases even without question mark (e.g., "submission deadline", "team size limit")
+        if len(words) <= 5 and any(phrase in clean for phrase in [
+            "submission deadline", "team size", "team limit", "registration fee",
+            "registration deadline", "wifi password", "venue address", "presentation template"
+        ]):
             return True
 
         # If very short message with 0 keywords, clearly chatter ONLY IF not formatted as a question
         if len(words) <= 4 and not keyword_hits and not is_question:
             return False
 
-        # Otherwise ambiguous: message might be a natural language question phrased uniquely
+        # Otherwise ambiguous: message might be a natural language question phrased uniquely,
+        # or a participant statement. Defer to LLM to understand what the participant wants!
         return None
 
     async def should_reply(

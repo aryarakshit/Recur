@@ -84,3 +84,25 @@ async def test_ignores_chatter_mentioning_other_user(classifier):
         is_reply_to_bot=False,
     )
     assert should_reply is False
+
+
+@pytest.mark.asyncio
+async def test_ignores_teammate_recruitment_and_lfg(classifier):
+    teammate_searches = [
+        # User's exact message
+        "Hi guys ,I am looking for two members to join my team Available Domains-applied ai(crew- ai) Frontend -next.js If anyone interested kindly reply or dm",
+        "Looking for 1 frontend dev to join our team",
+        "Hey everyone, looking for 2 members for AI track, DM me if interested",
+        "Need a backend developer for our team, ping me",
+        "Anyone interested to join our team? We have 1 slot open",
+        "Looking to join a team, skilled in Python and React",
+        "If anyone interested kindly reply or dm",
+        "Join my team, we need 1 more member",
+    ]
+    for msg in teammate_searches:
+        should_reply, reason = await classifier.should_reply(
+            content=msg,
+            is_bot_mentioned=False,
+            is_reply_to_bot=False,
+        )
+        assert should_reply is False, f"Erroneously replied to teammate search: '{msg}' (Reason: {reason})"
