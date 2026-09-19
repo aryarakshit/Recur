@@ -189,13 +189,39 @@ class MessageClassifier:
 
         return False
 
+    def is_peer_conversation(self, text: str) -> bool:
+        """Detects if message is a peer-to-peer discussion, chatting with other hackers,
+        or soliciting opinions from other participants, rather than asking the bot.
+        """
+        clean = text.strip().lower()
+        if not clean:
+            return False
+
+        peer_patterns = [
+            # Addressing the chat room / peers
+            r"^\s*(?:hey|hi|hello|yo)?\s*(?:guys|everyone|folks|people|all|y'?all|buddies|friends)\b",
+            # Peer opinion / experience inquiries
+            r"\b(?:what\s+do\s+(?:you\s+guys|y'?all|you\s+all)\s+think)\b",
+            r"\b(?:has\s+anyone\s+(?:tried|used|tested|worked\s+with|seen|done))\b",
+            r"\b(?:is\s+anyone\s+else)\b",
+            r"\b(?:anyone\s+(?:here\s+)?(?:using|building|submitting|facing|working|doing))\b",
+            r"\b(?:which|what)\s+(?:tech\s+stack|framework|library|tools?)\s+are\s+(?:you|y'?all|you\s+guys)\s+using\b",
+            r"\b(?:how\s+is\s+(?:everyone|everybody|y'?all|your\s+team)\s+(?:doing|going))\b",
+            r"\b(?:anyone\s+want\s+to\s+(?:share|see|test))\b",
+            r"\b(?:is\s+it\s+just\s+me\s+or)\b",
+        ]
+        for pat in peer_patterns:
+            if re.search(pat, clean):
+                return True
+        return False
+
     def evaluate_heuristics(self, text: str) -> bool | None:
         """Evaluates heuristic rules.
 
         Returns:
             True: Definite hackathon question
-            False: Definite chatter / unrelated / teammate search / addressed to human staff
-            None: Ambiguous (defer to LLM classifier to understand what participant wants)
+            False: Definite chatter / unrelated / teammate search / addressed to human staff / peer chat
+            None: Ambiguous / Situational (defer to LLM classifier to understand what participant wants)
         """
         clean = text.strip().lower()
 
@@ -211,6 +237,9 @@ class MessageClassifier:
         if self.is_addressed_to_human(clean):
             return False
 
+        # 4. Definite peer-to-peer conversation among hackers
+        if self.is_peer_conversation(clean):
+            return False
 
         # Identity questions directed at the bot
         if re.search(r"\b(who\s+are\s+you|what\s+are\s+you|who\s+is\s+recur|what\s+is\s+recur|tell\s+me\s+about\s+yourself|introduce\s+yourself)\b", clean):
@@ -234,9 +263,9 @@ class MessageClassifier:
             "should", "could", "may"
         ])
 
-        # Strong signal: has hackathon keywords AND formatted as an inquiry/question
-        if keyword_hits and is_question:
-            return True
+        # If very short message with 0 keywords, clearly chatter ONLY IF not formatted as a question
+        if len(words) <= 4 and not keyword_hits and not is_question:
+            return False
 
         # Explicit short query phrases even without question mark (e.g., "submission deadline", "team size limit")
         if len(words) <= 5 and any(phrase in clean for phrase in [
@@ -245,12 +274,17 @@ class MessageClassifier:
         ]):
             return True
 
-        # If very short message with 0 keywords, clearly chatter ONLY IF not formatted as a question
-        if len(words) <= 4 and not keyword_hits and not is_question:
-            return False
+        # Direct, concise official hackathon question (short and focused on rules/facts)
+        # e.g., "When is registration closing?", "Can international students participate?", "Is registration free?"
+        is_conversational_narrative = any(phrase in clean for phrase in [
+            "working on", "me and my team", "our team is", "still working", "trying to build",
+            "what do you think", "what should we", "will that anyhow", "affect our"
+        ])
+        if keyword_hits and is_question and len(words) <= 12 and not is_conversational_narrative:
+            return True
 
-        # Otherwise ambiguous: message might be a natural language question phrased uniquely,
-        # or a participant statement. Defer to LLM to understand what the participant wants!
+        # Otherwise ambiguous / situational: message might be a conversational dilemma,
+        # natural language question, or participant situation. Defer to LLM to understand what the participant wants!
         return None
 
     async def should_reply(
@@ -275,6 +309,10 @@ class MessageClassifier:
         # Check if message is addressed specifically to human mentors/staff (stay quiet!)
         if self.is_addressed_to_human(content):
             return False, "Message addressed to human mentors/staff"
+
+        # Check if message is peer-to-peer discussion among participants (stay quiet!)
+        if self.is_peer_conversation(content):
+            return False, "Peer-to-peer discussion / chat among participants"
 
         # Rule 3: Fast heuristic check
         heuristic_result = self.evaluate_heuristics(content)

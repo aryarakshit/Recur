@@ -77,6 +77,12 @@ class AnswerGenerator:
                     logger.info("Question '%s' is not related to hackathon.", question)
                     return OFF_TOPIC_REPLY, False
 
+            # If candidates were retrieved (e.g. conversational/long phrasing where similarity
+            # was slightly below strict threshold), utilize top candidates for situational grounding
+            if retrieval_results:
+                relevant_results = retrieval_results[:3]
+
+        if not relevant_results:
             # If question might have answer on Devfolio or website, try live sync
             if self.live_sync and is_time_or_deadline_query:
                 logger.info("Query '%s' triggered live web fetch from Devfolio and recursiveacm.in", question)

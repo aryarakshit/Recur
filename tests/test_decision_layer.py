@@ -165,3 +165,38 @@ async def test_does_not_ignore_objective_questions_about_mentors(classifier):
         )
         assert should_reply is True, f"Failed to answer objective question: '{q}' (Reason: {reason})"
 
+
+@pytest.mark.asyncio
+async def test_ignores_peer_conversation(classifier):
+    peer_messages = [
+        "Hey guys, which library are you using for graphs?",
+        "Guys, what do you think of this architecture?",
+        "Has anyone tried deploying on Render?",
+        "Is anyone else experiencing lag on Devfolio?",
+        "What tech stack are you guys using?",
+        "How is everyone doing with their projects?",
+        "Anyone want to test our API?",
+        "Is it just me or is the venue cold?",
+    ]
+    for msg in peer_messages:
+        assert classifier.is_peer_conversation(msg) is True, f"Failed to detect peer conversation: '{msg}'"
+        should_reply, reason = await classifier.should_reply(
+            content=msg,
+            is_bot_mentioned=False,
+            is_reply_to_bot=False,
+        )
+        assert should_reply is False, f"Erroneously replied to peer conversation: '{msg}' (Reason: {reason})"
+
+
+@pytest.mark.asyncio
+async def test_peer_conversation_replies_when_bot_mentioned(classifier):
+    msg = "Hey guys, which tech stack can we use for the AI track?"
+    should_reply, reason = await classifier.should_reply(
+        content=msg,
+        is_bot_mentioned=True,
+        is_reply_to_bot=False,
+    )
+    assert should_reply is True
+    assert "mentioned" in reason.lower()
+
+
