@@ -159,11 +159,12 @@ def main() -> None:
         print_missing_token_guide()
         sys.exit(0)
 
-    # Configure Discord client with required intents
+    # Configure Discord client with required intents and allowed mentions
     intents = discord.Intents.default()
     intents.message_content = True  # Required to inspect message text
+    allowed_mentions = discord.AllowedMentions(everyone=True, users=True, roles=True, replied_user=True)
 
-    bot = commands.Bot(command_prefix="!", intents=intents)
+    bot = commands.Bot(command_prefix="!", intents=intents, allowed_mentions=allowed_mentions)
 
     # Setup slash commands
     setup_commands(

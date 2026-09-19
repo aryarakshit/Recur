@@ -133,3 +133,89 @@ def test_author_allowed(message_handler):
     allowed, _ = message_handler._is_author_allowed(hacker, bot_user, is_direct_mention=True)
     assert allowed is True
 
+
+def test_team_finding_channel(message_handler):
+    for name in ["find-your-team!", "find-your-team", "#find-your-team!", "🤝-find-your-team!"]:
+        ch = MagicMock()
+        ch.name = name
+        ch.parent = None
+        assert message_handler._is_team_finding_channel(ch) is True, f"Channel {name} should be recognized"
+
+    for name in ["general", "ask-mentors", "announcements", "help"]:
+        ch = MagicMock()
+        ch.name = name
+        ch.parent = None
+        assert message_handler._is_team_finding_channel(ch) is False
+
+
+@pytest.mark.asyncio
+async def test_team_finding_handler_replies_everyone():
+    from unittest.mock import AsyncMock
+    from ai.classifier import MessageClassifier
+    from ai.provider import MockProvider
+
+    cfg = Config()
+    classifier = MessageClassifier(MockProvider())
+    handler = MessageHandler(
+        classifier=classifier,
+        generator=MagicMock(),
+        retriever=MagicMock(),
+        memory=MagicMock(),
+        database=MagicMock(),
+        config=cfg,
+    )
+
+    bot_user = MagicMock()
+    bot_user.id = 999999
+
+    ch = MagicMock()
+    ch.name = "find-your-team!"
+    ch.parent = None
+
+    # 1. Looking for members message -> Should reply tagging @everyone
+    msg = MagicMock()
+    msg.channel = ch
+    msg.author = MagicMock()
+    msg.author.id = 12345
+    msg.author.bot = False
+    msg.content = "Looking for 2 members for our team. Frontend React, Backend Python. DM me!"
+    msg.mentions = []
+    msg.reference = None
+    msg.reply = AsyncMock()
+
+    handled = await handler._handle_team_finding_message(msg, bot_user)
+    assert handled is True
+    msg.reply.assert_called_once()
+    call_args, call_kwargs = msg.reply.call_args
+    assert "@everyone" in call_args[0]
+    assert call_kwargs.get("allowed_mentions").everyone is True
+
+    # 2. Duplicate immediate message from same user -> Cooldown active, no second reply
+    msg2 = MagicMock()
+    msg2.channel = ch
+    msg2.author = msg.author
+    msg2.content = "Need 1 more teammate"
+    msg2.mentions = []
+    msg2.reference = None
+    msg2.reply = AsyncMock()
+
+    handled2 = await handler._handle_team_finding_message(msg2, bot_user)
+    assert handled2 is True
+    msg2.reply.assert_not_called()
+
+    # 3. Chatter in team channel -> Ignored, no reply
+    msg3 = MagicMock()
+    msg3.channel = ch
+    msg3.author = MagicMock()
+    msg3.author.id = 999
+    msg3.author.bot = False
+    msg3.content = "lol cool"
+    msg3.mentions = []
+    msg3.reference = None
+    msg3.reply = AsyncMock()
+
+    handled3 = await handler._handle_team_finding_message(msg3, bot_user)
+    assert handled3 is True
+    msg3.reply.assert_not_called()
+
+

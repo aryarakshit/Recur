@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING
+import time
+from typing import Any, TYPE_CHECKING
 import discord
 
 if TYPE_CHECKING:
@@ -56,6 +57,7 @@ class MessageHandler:
         self.memory = memory
         self.db = database
         self.config = config
+        self.last_team_ping: dict[int, float] = {}
 
     def _clean_content(self, message: discord.Message, bot_user: discord.ClientUser) -> str:
         """Removes bot mention tags from message content to yield the pure question."""
@@ -85,6 +87,115 @@ class MessageHandler:
                 if clean == clean_al or clean_al in clean:
                     return True
         return False
+
+    def _is_team_finding_channel(self, channel: Any) -> bool:
+        """Verifies if the message was sent in a team-finding channel (e.g. #find-your-team!)."""
+        team_channels = getattr(self.config, "team_finding_channel_names", ["find-your-team", "find-your-team!"])
+        if not team_channels:
+            team_channels = ["find-your-team", "find-your-team!"]
+
+        raw_names = []
+        name = getattr(channel, "name", None)
+        if name:
+            raw_names.append(name.lower())
+        parent = getattr(channel, "parent", None)
+        if parent and getattr(parent, "name", None):
+            raw_names.append(parent.name.lower())
+
+        for raw in raw_names:
+            clean = re.sub(r"[^a-z0-9\-]", "", raw).strip("-")
+            for tc in team_channels:
+                clean_tc = re.sub(r"[^a-z0-9\-]", "", tc.lower()).strip("-")
+                if clean == clean_tc or clean_tc in clean or clean in clean_tc:
+                    return True
+        return False
+
+    async def _handle_team_finding_message(
+        self,
+        message: discord.Message,
+        bot_user: discord.ClientUser,
+        is_mentioned: bool = False,
+    ) -> bool:
+        """Handles messages sent in #find-your-team! by pinging @everyone if looking for members.
+
+        Returns:
+            True if handled (either replied with @everyone or ignored as non-question chatter).
+            False if it is a direct mention question that should fall back to the Q&A pipeline.
+        """
+        text = self._clean_content(message, bot_user)
+        if not text:
+            return True
+
+        clean = text.strip().lower()
+
+        # Ignore chatter / noise / greetings
+        if self.classifier.is_chatter(clean):
+            return True
+
+        # Check if the message is looking for members / team recruitment
+        is_teammate = self.classifier.is_teammate_search(clean)
+
+        # In a dedicated team-finding channel, also match non-chatter messages discussing teams or recruitment
+        if not is_teammate:
+            has_team_word = any(w in clean for w in ["team", "teammate", "teammates", "member", "members", "group", "squad"])
+            has_recruitment_word = any(
+                w in clean for w in [
+                    "looking", "need", "require", "seeking", "join", "vacancy", "vacancies",
+                    "spot", "spots", "slot", "slots", "open", "available", "dm", "pm",
+                    "frontend", "backend", "fullstack", "dev", "developer", "designer", "ai", "ml"
+                ]
+            )
+            # Must not be an official hackathon rule inquiry
+            is_rule_query = any(clean.startswith(q) for q in ["what", "can", "is", "are", "how", "where"]) and any(
+                term in clean for term in ["limit", "maximum", "rule", "rules", "allowed", "allow", "size", "solo", "minimum"]
+            )
+            if has_team_word and has_recruitment_word and not is_rule_query and len(clean.split()) >= 3:
+                is_teammate = True
+
+        if not is_teammate:
+            # If user explicitly asked the bot a question, allow falling through to Q&A
+            if is_mentioned:
+                return False
+            logger.info("Ignoring non-team-search message in team channel: '%s'", text)
+            return True
+
+        # Cooldown check: prevent rapid @everyone spam from the same author (60s)
+        user_id = message.author.id
+        now = time.time()
+        last_ping = self.last_team_ping.get(user_id, 0.0)
+        if now - last_ping < 60.0:
+            logger.info("Skipping @everyone ping for %s in #%s (user cooldown active)", message.author, getattr(message.channel, "name", "channel"))
+            return True
+
+        self.last_team_ping[user_id] = now
+        logger.info("Triggered team recruitment @everyone reply for %s in #%s", message.author, getattr(message.channel, "name", "channel"))
+
+        reply_content = (
+            "@everyone 📢 **Looking for Team Members!**\n"
+            "Check out this request above 👆 — reply or DM if you want to team up! 🤝"
+        )
+
+        try:
+            await message.reply(
+                reply_content,
+                allowed_mentions=discord.AllowedMentions(everyone=True, replied_user=True),
+            )
+        except discord.Forbidden:
+            logger.warning(
+                "Bot lacks 'Mention @everyone' permission in #%s. Falling back to sending without mention.",
+                getattr(message.channel, "name", "channel"),
+            )
+            try:
+                await message.reply(
+                    reply_content,
+                    allowed_mentions=discord.AllowedMentions(everyone=False, replied_user=True),
+                )
+            except Exception as e:
+                logger.error("Failed to send teammate recruitment fallback reply: %s", e)
+        except Exception as e:
+            logger.error("Failed to send teammate recruitment reply: %s", e)
+
+        return True
 
     def _is_author_allowed(
         self,
@@ -143,6 +254,12 @@ class MessageHandler:
 
     async def handle_message(self, message: discord.Message, bot_user: discord.ClientUser) -> None:
         """Processes an incoming message and executes the response pipeline."""
+        # Always ignore bots and self
+        if getattr(message.author, "bot", False) or message.author.id == bot_user.id:
+            return
+        if "dyno" in getattr(message.author, "name", "").lower():
+            return
+
         # Check if bot is directly mentioned
         is_mentioned = bot_user in message.mentions
 
@@ -161,7 +278,17 @@ class MessageHandler:
             except Exception as e:
                 logger.debug("Could not resolve referenced message: %s", e)
 
-        # 1. Author & Role validation: Only reply to 'Hacker' (participants), ignore bots & staff
+        # 1. Team Finding Channel Handler (#find-your-team!)
+        if self._is_team_finding_channel(message.channel):
+            handled = await self._handle_team_finding_message(
+                message=message,
+                bot_user=bot_user,
+                is_mentioned=is_mentioned or is_reply_to_bot,
+            )
+            if handled:
+                return
+
+        # 2. Author & Role validation: Only reply to 'Hacker' (participants), ignore bots & staff
         author_allowed, author_reason = self._is_author_allowed(
             author=message.author,
             bot_user=bot_user,
@@ -171,7 +298,7 @@ class MessageHandler:
             logger.info("Ignoring message from %s: %s", message.author, author_reason)
             return
 
-        # 2. Channel validation: Only reply in 'general' and 'ask-mentors' (unless directly mentioned)
+        # 3. Channel validation: Only reply in 'general' and 'ask-mentors' (unless directly mentioned)
         if not self._is_channel_allowed(message.channel) and not (is_mentioned or is_reply_to_bot):
             channel_name = getattr(message.channel, "name", "DM")
             logger.info(

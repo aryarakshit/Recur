@@ -99,16 +99,23 @@ class MessageClassifier:
             r"\blooking\s+for\s+.*(member|members|teammate|teammates|dev|developer|partner|team|group|person|people)\b",
             # Looking to join a team
             r"\blooking\s+to\s+join\s+.*team\b",
+            r"\blooking\s+to\s+team\s*up\b",
+            r"\blooking\s+for\s+(a\s+)?team\b",
             # Need member / teammates
             r"\bneed\s+.*(member|members|teammate|teammates|frontend|backend|dev|designer)\b",
+            r"\b(team\s+needs?|team\s+requires?)\b",
             # Join my / our team
-            r"\bjoin\s+(my|our)\s+team\b",
+            r"\bjoin\s+(my|our|a)\s+team\b",
             # Interested kindly reply / dm / pm
             r"\b(interested\s+.*(dm|pm|reply|ping)|reply\s+or\s+dm|dm\s+me|pm\s+me|ping\s+me|contact\s+me)\b",
             # Team formation inquiries to peers: anyone want to join / team up
-            r"\banyone\s+(want|wanna|interested)\s+(to\s+)?(join|team\s+up|partner)\b",
-            # LFG / spots left
-            r"\b(lfg|spots?\s+(available|left|open)|slots?\s+(available|left|open))\b",
+            r"\banyone\s+(want|wanna|interested)\s+(to\s+)?(join|team\s*up|partner)\b",
+            r"\banyone\s+(need|needs|looking\s+for)\s+(a\s+)?(teammate|member|team)\b",
+            r"\b(who\s+(wants?|wanna)\s+to\s+(join|team\s*up|partner))\b",
+            r"\b(team\s*up\s+with(\s+me)?)\b",
+            r"\b(forming\s+(a\s+)?team|building\s+(a\s+)?team|create\s+(a\s+)?team)\b",
+            # LFG / spots left / vacancies
+            r"\b(lfg|spots?\s+(available|left|open)|slots?\s+(available|left|open)|vacanc(y|ies)|openings?)\b",
             # Domains / roles available for team recruitment
             r"\bdomains?\s*[-:]\s*.*(ai|frontend|backend|web|app)\b",
             r"\bavailable\s+.*(domain|domains|role|roles|slot|slots|spot|spots)\b",

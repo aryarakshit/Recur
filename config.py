@@ -70,6 +70,13 @@ class Config:
     moderator_mode: bool = field(
         default_factory=lambda: os.getenv("MODERATOR_MODE", "true").strip().lower() in ("true", "1", "yes")
     )
+    team_finding_channel_names: list[str] = field(
+        default_factory=lambda: [
+            c.strip().lower().lstrip("#")
+            for c in os.getenv("TEAM_FINDING_CHANNELS", "find-your-team,find-your-team!").split(",")
+            if c.strip()
+        ]
+    )
 
 
     # LLM settings

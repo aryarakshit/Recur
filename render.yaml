@@ -30,3 +30,6 @@ services:
         value: "admin,administrator,moderator,mod,core member,core mem,volunteer,judge,bot,dyno"
       - key: MODERATOR_MODE
         value: "true"
+      - key: TEAM_FINDING_CHANNELS
+        value: "find-your-team,find-your-team!"
+
