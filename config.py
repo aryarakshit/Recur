@@ -42,6 +42,32 @@ class Config:
         default_factory=lambda: os.getenv("MAINTAINER_MENTION", "@Core Member or @Volunteer").strip()
     )
 
+    # Channel & Role Restrictions
+    allowed_channel_names: list[str] = field(
+        default_factory=lambda: [
+            c.strip().lower().lstrip("#")
+            for c in os.getenv("ALLOWED_CHANNELS", "general,ask-mentors").split(",")
+            if c.strip()
+        ]
+    )
+    allowed_role_names: list[str] = field(
+        default_factory=lambda: [
+            r.strip().lower()
+            for r in os.getenv("ALLOWED_ROLES", "hacker").split(",")
+            if r.strip()
+        ]
+    )
+    excluded_role_names: list[str] = field(
+        default_factory=lambda: [
+            r.strip().lower()
+            for r in os.getenv(
+                "EXCLUDED_ROLES",
+                "admin,administrator,core member,core mem,volunteer,judge,bot,dyno",
+            ).split(",")
+            if r.strip()
+        ]
+    )
+
     # LLM settings
     llm_provider: str = field(
         default_factory=lambda: os.getenv("LLM_PROVIDER", "gemini").strip().lower()

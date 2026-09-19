@@ -64,10 +64,82 @@ class MessageHandler:
         content = re.sub(rf"<@!?{bot_user.id}>", "", content)
         return content.strip()
 
+    def _is_channel_allowed(self, channel: discord.abc.Messageable) -> bool:
+        """Verifies if the message was sent in an allowed channel (e.g. #general or #ask-mentors)."""
+        allowed = self.config.allowed_channel_names
+        if not allowed:
+            return True
+
+        # Check channel name (and parent channel name if inside a thread)
+        names = []
+        name = getattr(channel, "name", None)
+        if name:
+            names.append(name.lower().lstrip("#"))
+        parent = getattr(channel, "parent", None)
+        if parent and getattr(parent, "name", None):
+            names.append(parent.name.lower().lstrip("#"))
+
+        for n in names:
+            if n in allowed:
+                return True
+        return False
+
+    def _is_author_allowed(self, author: discord.User | discord.Member, bot_user: discord.ClientUser) -> tuple[bool, str]:
+        """Checks if the message author is permitted to receive AI answers.
+
+        Rules:
+        1. Ignore any bots (author.bot is True, bot_user, or name matching 'dyno').
+        2. Ignore staff/organizer roles: 'admin', 'core member', 'volunteer', 'judge', 'bot', 'dyno'.
+        3. Only reply to participants with the 'Hacker' role.
+        """
+        if getattr(author, "bot", False) or author.id == bot_user.id:
+            return False, "Author is a bot"
+
+        author_name = getattr(author, "name", "").lower()
+        if "dyno" in author_name:
+            return False, "Author is Dyno"
+
+        # If in a guild (discord.Member), inspect roles and administrator permissions
+        if hasattr(author, "roles"):
+            role_names = [r.name.lower() for r in author.roles]
+
+            # Check for administrator permissions
+            perms = getattr(author, "guild_permissions", None)
+            if perms and getattr(perms, "administrator", False):
+                return False, "Author has Administrator permissions"
+
+            # Check for excluded roles (admin, core member, volunteer, judge, bot, dyno)
+            for ex in self.config.excluded_role_names:
+                if any(ex in r for r in role_names):
+                    return False, f"Author has excluded role '{ex}'"
+
+            # Check for required 'Hacker' role
+            if self.config.allowed_role_names:
+                has_allowed = any(
+                    any(al == r or al in r for al in self.config.allowed_role_names)
+                    for r in role_names
+                )
+                if not has_allowed:
+                    return False, f"Author does not have required 'Hacker' role (roles: {role_names})"
+
+        return True, "Author is a participant (Hacker)"
+
     async def handle_message(self, message: discord.Message, bot_user: discord.ClientUser) -> None:
         """Processes an incoming message and executes the response pipeline."""
-        # 1. Ignore messages from bots (including self)
-        if message.author.bot or message.author.id == bot_user.id:
+        # 1. Author & Role validation: Only reply to 'Hacker' (participants), ignore bots & staff
+        author_allowed, author_reason = self._is_author_allowed(message.author, bot_user)
+        if not author_allowed:
+            logger.info("Ignoring message from %s: %s", message.author, author_reason)
+            return
+
+        # 2. Channel validation: Only reply in 'general' and 'ask-mentors'
+        if not self._is_channel_allowed(message.channel):
+            channel_name = getattr(message.channel, "name", "DM")
+            logger.info(
+                "Ignoring message in non-allowed channel #%s (allowed: %s)",
+                channel_name,
+                self.config.allowed_channel_names,
+            )
             return
 
         # Check if bot is directly mentioned

@@ -22,3 +22,9 @@ services:
         value: "@Core Member or @Volunteer"
       - key: MAINTAINER_ROLE_ID
         sync: false
+      - key: ALLOWED_CHANNELS
+        value: "general,ask-mentors"
+      - key: ALLOWED_ROLES
+        value: "hacker"
+      - key: EXCLUDED_ROLES
+        value: "admin,administrator,core member,core mem,volunteer,judge,bot,dyno"
