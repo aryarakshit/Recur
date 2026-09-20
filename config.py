@@ -58,7 +58,7 @@ class Config:
             r.strip().lower()
             for r in os.getenv(
                 "ALLOWED_ROLES",
-                "hacker,hackers,participant,participants,member,members,attendee,attendees,student,students",
+                "hacker,hackers,participant,participants,attendee,attendees,student,students",
             ).split(",")
             if r.strip()
         ]
@@ -68,7 +68,7 @@ class Config:
             r.strip().lower()
             for r in os.getenv(
                 "EXCLUDED_ROLES",
-                "admin,administrator,moderator,mod,core member,core mem,volunteer,judge,bot,dyno",
+                "admin,administrator,moderator,mod,core member,core mem,volunteer,voluntear,judge,judges,bot,bots,dyno",
             ).split(",")
             if r.strip()
         ]

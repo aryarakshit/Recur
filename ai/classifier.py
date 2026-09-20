@@ -223,6 +223,16 @@ class MessageClassifier:
                 return True
         return False
 
+    def is_addressed_to_other_user(self, text: str) -> bool:
+        """Detects if message is explicitly addressed to another user (e.g. '@someone ...' or '<@123> ...')."""
+        clean = text.strip().lower()
+        if not clean:
+            return False
+        # Matches mention tags like <@123456> or plain-text pings like @heyimsouvik at the beginning of message
+        if re.match(r"^\s*(?:<@!?\d+>|@[a-zA-Z0-9_\.\-]+)\b", clean):
+            return True
+        return False
+
     def evaluate_heuristics(self, text: str) -> bool | None:
         """Evaluates heuristic rules.
 
@@ -237,15 +247,19 @@ class MessageClassifier:
         if self.is_chatter(clean):
             return False
 
-        # 2. Definite teammate search / peer recruiting check
+        # 2. Definite address to another user
+        if self.is_addressed_to_other_user(clean):
+            return False
+
+        # 3. Definite teammate search / peer recruiting check
         if self.is_teammate_search(clean):
             return False
 
-        # 3. Definite address to human mentors/judges/staff
+        # 4. Definite address to human mentors/judges/staff
         if self.is_addressed_to_human(clean):
             return False
 
-        # 4. Definite peer-to-peer conversation among hackers
+        # 5. Definite peer-to-peer conversation among hackers
         if self.is_peer_conversation(clean):
             return False
 
@@ -301,6 +315,8 @@ class MessageClassifier:
         is_bot_mentioned: bool,
         is_reply_to_bot: bool,
         context: Optional[str] = None,
+        has_other_mentions: bool = False,
+        is_reply_to_other: bool = False,
     ) -> tuple[bool, str]:
         """Main reply decision pipeline matching Section 5 specifications.
 
@@ -313,6 +329,10 @@ class MessageClassifier:
 
         if is_reply_to_bot:
             return True, "Reply to bot message"
+
+        # Check if message is addressed to another user (via mention, reply, or @tag)
+        if has_other_mentions or is_reply_to_other or self.is_addressed_to_other_user(content):
+            return False, "Message addressed to another user"
 
         # Check if message is addressed specifically to human mentors/staff (stay quiet!)
         if self.is_addressed_to_human(content):

@@ -613,6 +613,73 @@ async def test_catch_up_unanswered_messages():
     msg1.reply.assert_called_once()
 
 
+@pytest.mark.asyncio
+async def test_ignores_admin_messages_and_mentions_in_ambient_and_catchup():
+    from unittest.mock import AsyncMock
+    from ai.classifier import MessageClassifier
+    from ai.provider import MockProvider
+
+    cfg = Config()
+    classifier = MessageClassifier(MockProvider())
+    handler = MessageHandler(
+        classifier=classifier,
+        generator=MagicMock(),
+        retriever=MagicMock(),
+        memory=MagicMock(),
+        database=MagicMock(),
+        config=cfg,
+    )
+
+    bot_user = MagicMock()
+    bot_user.id = 999999
+
+    ch_general = MagicMock()
+    ch_general.name = "general"
+    ch_general.mention = "<#1111>"
+    ch_general.parent = None
+
+    guild = MagicMock()
+    guild.name = "Recursive Hackathon"
+    guild.text_channels = [ch_general]
+    ch_general.guild = guild
+
+    # Admin user asking another user a question (from user's screenshot)
+    admin_author = MagicMock()
+    admin_author.name = "admin_user"
+    admin_author.id = 11111
+    admin_author.bot = False
+    admin_author.roles = [MagicMock(name="Admin")]
+    admin_author.guild_permissions.administrator = True
+
+    other_user = MagicMock()
+    other_user.id = 22222
+    other_user.name = "heyimsouvik"
+
+    msg = MagicMock()
+    msg.id = 2001
+    msg.channel = ch_general
+    msg.guild = guild
+    msg.author = admin_author
+    msg.content = "@heyimsouvik What's the total size of your ppt?"
+    msg.mentions = [other_user]
+    msg.reference = None
+    msg.reply = AsyncMock()
+
+    # 1. Test live handle_message ignores this message
+    await handler.handle_message(msg, bot_user)
+    msg.reply.assert_not_called()
+
+    # 2. Test catch-up ignores this message
+    async def async_iter_gen(limit=20):
+        yield msg
+
+    ch_general.history = MagicMock(return_value=async_iter_gen())
+    count = await handler.catch_up_unanswered_messages(bot_user, [guild], limit_per_channel=20)
+    assert count == 0
+    msg.reply.assert_not_called()
+
+
+
 
 
 

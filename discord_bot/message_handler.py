@@ -58,6 +58,50 @@ class MessageHandler:
         self.db = database
         self.config = config
         self.last_team_ping: dict[int, float] = {}
+        self._member_cache: dict[int, tuple[discord.Member, float]] = {}
+
+    async def _resolve_member(
+        self,
+        author: discord.User | discord.Member,
+        guild: discord.Guild | None,
+    ) -> discord.Member | None:
+        """Resolves a discord.User or discord.Member into a full guild Member with loaded roles."""
+        if hasattr(author, "roles") and author.roles:
+            return author
+
+        if not guild:
+            return None
+
+        # Check in-memory cache (TTL 300s)
+        cached = self._member_cache.get(author.id)
+        if cached:
+            mem, ts = cached
+            if time.time() - ts < 300.0:
+                return mem
+
+        # Try guild local cache
+        get_mem = getattr(guild, "get_member", None)
+        if callable(get_mem):
+            try:
+                mem = get_mem(author.id)
+                if mem and hasattr(mem, "roles") and mem.roles:
+                    self._member_cache[author.id] = (mem, time.time())
+                    return mem
+            except Exception:
+                pass
+
+        # Fetch from Discord API over HTTP if not cached
+        fetch_mem = getattr(guild, "fetch_member", None)
+        if callable(fetch_mem):
+            try:
+                mem = await fetch_mem(author.id)
+                if mem and hasattr(mem, "roles"):
+                    self._member_cache[author.id] = (mem, time.time())
+                    return mem
+            except Exception as e:
+                logger.debug("Could not fetch member %s from guild: %s", author.id, e)
+
+        return None
 
     def _clean_content(self, message: discord.Message, bot_user: discord.ClientUser) -> str:
         """Removes bot mention tags from message content to yield the pure question."""
@@ -306,47 +350,62 @@ class MessageHandler:
         except Exception as e:
             logger.error("Failed to reply to author in #%s: %s", getattr(message.channel, "name", "channel"), e)
 
+    def _is_staff_or_bot(
+        self,
+        author: discord.User | discord.Member,
+        bot_user: discord.ClientUser,
+        resolved_member: discord.Member | None = None,
+    ) -> bool:
+        """Checks if the author is a bot, Dyno, Admin, Moderator, Core Member, Volunteer, or Judge."""
+        if getattr(author, "bot", False) or author.id == bot_user.id:
+            return True
+        if "dyno" in getattr(author, "name", "").lower():
+            return True
+
+        member = resolved_member or (author if hasattr(author, "roles") else None)
+        if member is not None and hasattr(member, "roles"):
+            role_names = [getattr(r, "name", "").lower() for r in member.roles]
+            perms = getattr(member, "guild_permissions", None)
+            is_admin = bool(perms and getattr(perms, "administrator", False)) or any(
+                "admin" in r or "administrator" in r for r in role_names
+            )
+            if is_admin:
+                return True
+            is_moderator = any("moderator" in r or "mod" in r for r in role_names)
+            if is_moderator:
+                return True
+            for ex in self.config.excluded_role_names:
+                if any(ex in r for r in role_names):
+                    return True
+        return False
+
     def _is_author_allowed(
         self,
         author: discord.User | discord.Member,
         bot_user: discord.ClientUser,
         is_direct_mention: bool = False,
+        resolved_member: discord.Member | None = None,
     ) -> tuple[bool, str]:
         """Checks if the message author is permitted to receive AI answers.
 
-        Rules:
-        1. Always ignore bots (author.bot is True, bot_user, or name matching 'dyno').
-        2. Never reply to staff / organizers (admin, administrator, moderator, core member, volunteer, judge, bot, dyno)
-           or users with administrator permissions.
-        3. Only reply to participants with the 'Hacker' / 'Participant' role.
+        Server Role Hierarchy & Colors:
+        1. Admin (Red): Staff / Organizer -> Never reply
+        2. Moderator (Purple): Staff -> Never reply
+        3. Core Member (Blue): Staff -> Never reply
+        4. Volunteer (Pink): Staff -> Never reply
+        5. Judge (Yellow): Staff -> Never reply
+        6. Bot / Dyno (Grey): Bots -> Never reply
+        7. Hacker (Green): Hackathon Participants -> ALLOWED to receive answers & recruitment forwards
         """
-        if getattr(author, "bot", False) or author.id == bot_user.id:
-            return False, "Author is a bot"
+        if self._is_staff_or_bot(author, bot_user, resolved_member=resolved_member):
+            return False, "Author is staff or a bot"
 
-        author_name = getattr(author, "name", "").lower()
-        if "dyno" in author_name:
-            return False, "Author is Dyno"
+        member = resolved_member or (author if hasattr(author, "roles") else None)
 
-        # If in a guild (discord.Member), inspect roles and administrator permissions
-        if hasattr(author, "roles"):
-            role_names = [r.name.lower() for r in author.roles]
-            perms = getattr(author, "guild_permissions", None)
-            is_admin = bool(perms and getattr(perms, "administrator", False)) or any(
-                "admin" in r or "administrator" in r for r in role_names
-            )
-            if is_admin:
-                return False, "Author has Administrator permissions or Admin role"
+        if member is not None and hasattr(member, "roles"):
+            role_names = [getattr(r, "name", "").lower() for r in member.roles]
 
-            is_moderator = any("moderator" in r or "mod" in r for r in role_names)
-            if is_moderator:
-                return False, "Author has Moderator role"
-
-            # Check for excluded staff roles (core member, volunteer, judge, bot, dyno)
-            for ex in self.config.excluded_role_names:
-                if any(ex in r for r in role_names):
-                    return False, f"Author has excluded staff role '{ex}'"
-
-            # Check for required 'Hacker' / 'Participant' role
+            # Check for required 'Hacker' / 'Participant' role (Green)
             if self.config.allowed_role_names:
                 has_allowed = any(
                     any(al in r for al in self.config.allowed_role_names)
@@ -355,11 +414,13 @@ class MessageHandler:
                 if not has_allowed:
                     return False, f"Author does not have required 'Hacker' role (roles: {role_names})"
 
-        # Explicit @Recur mentions for verified participants are allowed
-        if is_direct_mention:
-            return True, "Direct mention to bot"
+            return True, "Author is a participant (Hacker)"
 
-        return True, "Author is a participant (Hacker)"
+        # If author has no guild member roles loaded and could not be verified
+        if is_direct_mention:
+            return True, "Direct mention from unverified author"
+
+        return False, "Could not verify author has 'Hacker' role from guild roles"
 
     async def handle_message(self, message: discord.Message, bot_user: discord.ClientUser) -> None:
         """Processes an incoming message and executes the response pipeline."""
@@ -372,20 +433,29 @@ class MessageHandler:
         # Check if bot is directly mentioned
         is_mentioned = bot_user in message.mentions
 
-        # Check if message is a reply to one of the bot's messages
+        # Check if other users are mentioned (excluding bot)
+        other_mentions = [m for m in message.mentions if m.id != bot_user.id]
+        has_other_mentions = len(other_mentions) > 0
+
+        # Check if message is a reply to one of the bot's messages or to another user
         is_reply_to_bot = False
+        is_reply_to_other = False
         if message.reference and message.reference.message_id:
             try:
-                # If resolved message exists in cache
                 ref_msg = message.reference.resolved
+                if not (ref_msg and isinstance(ref_msg, discord.Message)):
+                    ref_msg = await message.channel.fetch_message(message.reference.message_id)
                 if ref_msg and isinstance(ref_msg, discord.Message):
-                    is_reply_to_bot = ref_msg.author.id == bot_user.id
-                else:
-                    # Fetch referenced message if needed
-                    fetched_msg = await message.channel.fetch_message(message.reference.message_id)
-                    is_reply_to_bot = fetched_msg.author.id == bot_user.id
+                    if ref_msg.author.id == bot_user.id:
+                        is_reply_to_bot = True
+                    else:
+                        is_reply_to_other = True
             except Exception as e:
                 logger.debug("Could not resolve referenced message: %s", e)
+                is_reply_to_other = not is_mentioned
+
+        # Resolve member with guild roles
+        resolved_member = await self._resolve_member(message.author, message.guild)
 
         # 1. Team Finding Channel Handler (#find-your-team!)
         if self._is_team_finding_channel(message.channel):
@@ -401,24 +471,16 @@ class MessageHandler:
         if not cleaned_text:
             return
 
+        # In ambient chat (not directly mentioned), never reply if message is addressing another user
+        if not (is_mentioned or is_reply_to_bot):
+            if has_other_mentions or is_reply_to_other or self.classifier.is_addressed_to_other_user(cleaned_text):
+                logger.info("Ignoring message addressed to another user in #%s: '%s'", getattr(message.channel, "name", "channel"), cleaned_text)
+                return
+
         # 2. Check if message is a teammate recruitment search in an allowed channel (#general, #ask-mentors, etc.)
         if self.classifier.is_teammate_search(cleaned_text):
             if self._is_channel_allowed(message.channel) or is_mentioned or is_reply_to_bot:
-                # Exclude bots, Dyno, admins, moderators, and staff from triggering recruitment forwards
-                is_staff_or_bot = getattr(message.author, "bot", False) or message.author.id == bot_user.id
-                if "dyno" in getattr(message.author, "name", "").lower():
-                    is_staff_or_bot = True
-                if not is_staff_or_bot and hasattr(message.author, "roles"):
-                    role_names = [r.name.lower() for r in message.author.roles]
-                    perms = getattr(message.author, "guild_permissions", None)
-                    is_admin_or_mod = bool(perms and getattr(perms, "administrator", False)) or any(
-                        "admin" in r or "administrator" in r or "moderator" in r or "mod" in r for r in role_names
-                    )
-                    has_excluded_role = any(ex in r for ex in self.config.excluded_role_names for r in role_names)
-                    if is_admin_or_mod or has_excluded_role:
-                        is_staff_or_bot = True
-
-                if not is_staff_or_bot:
+                if not self._is_staff_or_bot(message.author, bot_user, resolved_member=resolved_member):
                     await self._forward_team_finding_message(message, cleaned_text)
                     return
 
@@ -427,6 +489,7 @@ class MessageHandler:
             author=message.author,
             bot_user=bot_user,
             is_direct_mention=is_mentioned or is_reply_to_bot,
+            resolved_member=resolved_member,
         )
         if not author_allowed:
             logger.info("Ignoring message from %s: %s", message.author, author_reason)
@@ -448,12 +511,14 @@ class MessageHandler:
             user_id=message.author.id,
         )
 
-        # 2. Reply Decision Layer
+        # 5. Reply Decision Layer
         should_reply, reason = await self.classifier.should_reply(
             content=cleaned_text,
             is_bot_mentioned=is_mentioned,
             is_reply_to_bot=is_reply_to_bot,
             context=history_context,
+            has_other_mentions=has_other_mentions,
+            is_reply_to_other=is_reply_to_other,
         )
 
         if not should_reply:
@@ -625,8 +690,22 @@ class MessageHandler:
                     if msg.id in replied_to_by_bot:
                         continue
 
+                    # Resolve member with guild roles
+                    resolved_member = await self._resolve_member(msg.author, guild)
+
+                    # Skip bots, Dyno, and staff immediately
+                    if self._is_staff_or_bot(msg.author, bot_user, resolved_member=resolved_member):
+                        continue
+
                     cleaned = self._clean_content(msg, bot_user)
                     if not cleaned or self.classifier.is_chatter(cleaned):
+                        continue
+
+                    # Check if message is addressed to another user (via mention, reply, or @tag)
+                    other_mentions = [m for m in msg.mentions if m.id != bot_user.id]
+                    has_other_mentions = len(other_mentions) > 0
+                    is_reply_to_other = bool(msg.reference and msg.reference.message_id)
+                    if has_other_mentions or is_reply_to_other or self.classifier.is_addressed_to_other_user(cleaned):
                         continue
 
                     # If message is in team finding channel
@@ -642,23 +721,20 @@ class MessageHandler:
                     if self.classifier.is_teammate_search(cleaned):
                         if msg.id in forwarded_msg_ids:
                             continue
+                        await self._forward_team_finding_message(msg, cleaned)
+                        forwarded_msg_ids.add(msg.id)
+                        replied_to_by_bot.add(msg.id)
+                        processed_count += 1
+                        continue
 
-                        # Check author is not staff
-                        is_staff = False
-                        if hasattr(msg.author, "roles"):
-                            r_names = [r.name.lower() for r in msg.author.roles]
-                            perms = getattr(msg.author, "guild_permissions", None)
-                            is_staff = bool(perms and getattr(perms, "administrator", False)) or any(
-                                "admin" in r or "administrator" in r or "moderator" in r or "mod" in r for r in r_names
-                            ) or any(
-                                ex in r for ex in self.config.excluded_role_names for r in r_names
-                            )
-
-                        if not is_staff:
-                            await self._forward_team_finding_message(msg, cleaned)
-                            forwarded_msg_ids.add(msg.id)
-                            replied_to_by_bot.add(msg.id)
-                            processed_count += 1
+                    # For ambient Q&A questions, check author role (requires Hacker role)
+                    author_allowed, _ = self._is_author_allowed(
+                        author=msg.author,
+                        bot_user=bot_user,
+                        is_direct_mention=bot_user in msg.mentions,
+                        resolved_member=resolved_member,
+                    )
+                    if not author_allowed:
                         continue
 
                     # Ambient hackathon question: check if anyone replied to this message
@@ -674,6 +750,8 @@ class MessageHandler:
                         content=cleaned,
                         is_bot_mentioned=bot_user in msg.mentions,
                         is_reply_to_bot=False,
+                        has_other_mentions=has_other_mentions,
+                        is_reply_to_other=is_reply_to_other,
                     )
                     if should_reply:
                         await self.handle_message(msg, bot_user)

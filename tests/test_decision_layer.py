@@ -89,6 +89,27 @@ async def test_ignores_chatter_mentioning_other_user(classifier):
 
 
 @pytest.mark.asyncio
+async def test_ignores_question_addressed_to_another_user(classifier):
+    # Questions that mention another user (e.g. from user screenshot)
+    should_reply, reason = await classifier.should_reply(
+        content="@heyimsouvik What's the total size of your ppt?",
+        is_bot_mentioned=False,
+        is_reply_to_bot=False,
+        has_other_mentions=True,
+    )
+    assert should_reply is False
+    assert "another user" in reason.lower()
+
+    # Even without has_other_mentions flag, leading @tag is detected
+    should_reply2, _ = await classifier.should_reply(
+        content="@heyimsouvik What's the total size of your ppt?",
+        is_bot_mentioned=False,
+        is_reply_to_bot=False,
+    )
+    assert should_reply2 is False
+
+
+@pytest.mark.asyncio
 async def test_ignores_teammate_recruitment_and_lfg(classifier):
     teammate_searches = [
         # User's exact message from screenshot
