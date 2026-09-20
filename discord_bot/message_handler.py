@@ -422,7 +422,94 @@ class MessageHandler:
 
         return False, "Could not verify author has 'Hacker' role from guild roles"
 
-    async def handle_message(self, message: discord.Message, bot_user: discord.ClientUser) -> None:
+    async def _is_situation_already_resolved(
+        self,
+        message: discord.Message,
+        subsequent_messages: list[discord.Message],
+        bot_user: discord.ClientUser,
+    ) -> tuple[bool, str]:
+        """Inspects subsequent messages in the channel to see if the question was already answered or handled.
+
+        Checks:
+        1. Discord native inline reply to this message (by anyone).
+        2. Direct mention of the author (via @mention, <@id>, or @name).
+        3. Author self-resolution or acknowledgment (e.g. "thanks", "got it", "nvm").
+        4. Staff / Mentor response sent in the channel after the question.
+        """
+        if not subsequent_messages:
+            return False, "No subsequent messages"
+
+        author_id = message.author.id
+        author_name = getattr(message.author, "name", "").lower()
+        author_display = getattr(message.author, "display_name", "").lower()
+
+        def _get_ts(m: discord.Message) -> float:
+            cat = getattr(m, "created_at", None)
+            if cat is None:
+                return 0.0
+            if hasattr(cat, "timestamp"):
+                return cat.timestamp()
+            if isinstance(cat, (int, float)):
+                return float(cat)
+            return 0.0
+
+        msg_ts = _get_ts(message)
+
+        for sm in subsequent_messages:
+            # 1. Check if this subsequent message is an explicit reply to message
+            if sm.reference and sm.reference.message_id == message.id:
+                author_tag = getattr(sm.author, "name", "User")
+                return True, f"Already replied to by {author_tag} (via Discord reply)"
+
+            # Skip bot's own messages for subsequent checks
+            if sm.author.id == bot_user.id or getattr(sm.author, "bot", False):
+                continue
+
+            # 2. Check author self-resolution: did the question author post saying thanks / got it?
+            if sm.author.id == author_id:
+                clean_sm = getattr(sm, "content", "").lower().strip()
+                if any(re.search(rf"\b{term}\b", clean_sm) for term in [
+                    "thanks", "thank you", "thx", "ty", "tysm", "got it", "understood",
+                    "nvm", "nevermind", "all clear", "solved", "resolved", "clear now"
+                ]):
+                    return True, f"Author acknowledged resolution ('{clean_sm[:40]}')"
+
+            # 3. Check if subsequent message explicitly mentions the question author
+            if message.author in getattr(sm, "mentions", []):
+                return True, f"Addressed by {sm.author.name} (author mentioned)"
+            sm_content = getattr(sm, "content", "")
+            if f"<@{author_id}>" in sm_content or f"<@!{author_id}>" in sm_content:
+                return True, f"Addressed by {sm.author.name} (author ID tagged)"
+            if author_name and len(author_name) >= 3 and f"@{author_name}" in sm_content.lower():
+                return True, f"Addressed by {sm.author.name} (author @{author_name} tagged)"
+            if author_display and len(author_display) >= 3 and f"@{author_display}" in sm_content.lower():
+                return True, f"Addressed by {sm.author.name} (author @{author_display} tagged)"
+
+            # 4. Check if a staff member (Admin, Moderator, Core Member, Volunteer, Judge, or Mentor)
+            # posted in the channel after the question was asked.
+            guild = getattr(message, "guild", None) or getattr(sm, "guild", None)
+            resolved_sm_author = await self._resolve_member(sm.author, guild)
+            is_staff = self._is_staff_or_bot(sm.author, bot_user, resolved_member=resolved_sm_author)
+            if not is_staff and resolved_sm_author and hasattr(resolved_sm_author, "roles"):
+                r_names = [getattr(r, "name", "").lower() for r in resolved_sm_author.roles]
+                if any("mentor" in r for r in r_names):
+                    is_staff = True
+
+            if is_staff:
+                sm_ts = _get_ts(sm)
+                # If staff member posted within 2 hours after the question (or timestamps zero/mocked):
+                if msg_ts == 0.0 or sm_ts == 0.0 or (sm_ts >= msg_ts and sm_ts - msg_ts <= 7200):
+                    sm_author_name = getattr(sm.author, "name", "Staff/Mentor")
+                    return True, f"Handled by {sm_author_name} in channel after question"
+
+        return False, "No resolution detected"
+
+    async def handle_message(
+        self,
+        message: discord.Message,
+        bot_user: discord.ClientUser,
+        situational_context: Optional[str] = None,
+    ) -> None:
         """Processes an incoming message and executes the response pipeline."""
         # Always ignore bots and self
         if getattr(message.author, "bot", False) or message.author.id == bot_user.id:
@@ -477,6 +564,39 @@ class MessageHandler:
                 logger.info("Ignoring message addressed to another user in #%s: '%s'", getattr(message.channel, "name", "channel"), cleaned_text)
                 return
 
+            # Check if immediate channel context reveals an already answered question
+            if situational_context is None and message.channel and hasattr(message.channel, "history"):
+                try:
+                    channel_history = [m async for m in message.channel.history(limit=6)]
+
+                    def _get_ts(m: discord.Message) -> float:
+                        cat = getattr(m, "created_at", None)
+                        if cat and hasattr(cat, "timestamp"):
+                            return cat.timestamp()
+                        return 0.0
+
+                    msg_ts = _get_ts(message)
+                    subsequent = [
+                        m for m in channel_history
+                        if m.id != message.id and (_get_ts(m) > msg_ts if msg_ts else False)
+                    ]
+                    if subsequent:
+                        resolved, res_reason = await self._is_situation_already_resolved(
+                            message=message,
+                            subsequent_messages=subsequent,
+                            bot_user=bot_user,
+                        )
+                        if resolved:
+                            logger.info(
+                                "Ignoring message %s in #%s: %s",
+                                message.id,
+                                getattr(message.channel, "name", "channel"),
+                                res_reason,
+                            )
+                            return
+                except Exception as e:
+                    logger.debug("Could not inspect immediate channel history: %s", e)
+
         # 2. Check if message is a teammate recruitment search in an allowed channel (#general, #ask-mentors, etc.)
         if self.classifier.is_teammate_search(cleaned_text):
             if self._is_channel_allowed(message.channel) or is_mentioned or is_reply_to_bot:
@@ -511,12 +631,14 @@ class MessageHandler:
             user_id=message.author.id,
         )
 
+        decision_context = situational_context or history_context
+
         # 5. Reply Decision Layer
         should_reply, reason = await self.classifier.should_reply(
             content=cleaned_text,
             is_bot_mentioned=is_mentioned,
             is_reply_to_bot=is_reply_to_bot,
-            context=history_context,
+            context=decision_context,
             has_other_mentions=has_other_mentions,
             is_reply_to_other=is_reply_to_other,
         )
@@ -575,7 +697,7 @@ class MessageHandler:
             answer, was_fallback = await self.generator.generate_answer(
                 question=cleaned_text,
                 retrieval_results=retrieval_results,
-                history=history_context,
+                history=decision_context or history_context,
                 organizer_channel=organizer_channel_str,
                 organizer_tag=organizer_tag_str,
             )
@@ -679,7 +801,8 @@ class MessageHandler:
                         replied_to_by_bot.add(m.reference.message_id)
 
                 # Iterate in chronological order (oldest first)
-                for msg in reversed(recent_messages):
+                chronological_messages = list(reversed(recent_messages))
+                for idx, msg in enumerate(chronological_messages):
                     # Ignore bots, Dyno, self
                     if getattr(msg.author, "bot", False) or msg.author.id == bot_user.id:
                         continue
@@ -689,6 +812,9 @@ class MessageHandler:
                     # If bot already replied directly to this message, skip
                     if msg.id in replied_to_by_bot:
                         continue
+
+                    # Subsequent messages sent in this channel after msg was sent
+                    subsequent_messages = chronological_messages[idx + 1 :]
 
                     # Resolve member with guild roles
                     resolved_member = await self._resolve_member(msg.author, guild)
@@ -721,6 +847,15 @@ class MessageHandler:
                     if self.classifier.is_teammate_search(cleaned):
                         if msg.id in forwarded_msg_ids:
                             continue
+                        # Check if teammate search was already resolved (e.g. author got team or someone responded)
+                        already_resolved, res_reason = await self._is_situation_already_resolved(
+                            message=msg,
+                            subsequent_messages=subsequent_messages,
+                            bot_user=bot_user,
+                        )
+                        if already_resolved:
+                            logger.info("Catch-up skipping resolved teammate search %s: %s", msg.id, res_reason)
+                            continue
                         await self._forward_team_finding_message(msg, cleaned)
                         forwarded_msg_ids.add(msg.id)
                         replied_to_by_bot.add(msg.id)
@@ -737,25 +872,55 @@ class MessageHandler:
                     if not author_allowed:
                         continue
 
-                    # Ambient hackathon question: check if anyone replied to this message
-                    has_reply = any(
-                        m.reference and m.reference.message_id == msg.id
-                        for m in recent_messages
+                    # Check situational context: Did a mentor/staff member or peer already answer, or did author resolve?
+                    already_resolved, res_reason = await self._is_situation_already_resolved(
+                        message=msg,
+                        subsequent_messages=subsequent_messages,
+                        bot_user=bot_user,
                     )
-                    if has_reply:
+                    if already_resolved:
+                        logger.info(
+                            "Catch-up skipping message %s from %s in #%s: %s",
+                            msg.id,
+                            msg.author,
+                            getattr(ch, "name", "channel"),
+                            res_reason,
+                        )
                         continue
 
-                    # Process through normal handle_message pipeline
-                    should_reply, _ = await self.classifier.should_reply(
+                    # Build situational context from subsequent messages if any exist
+                    situational_context = None
+                    if subsequent_messages:
+                        context_lines = []
+                        for sm in subsequent_messages[:10]:
+                            sm_author = getattr(sm.author, "display_name", getattr(sm.author, "name", "User"))
+                            resolved_sm = await self._resolve_member(sm.author, guild)
+                            is_sm_staff = self._is_staff_or_bot(sm.author, bot_user, resolved_member=resolved_sm)
+                            role_label = "Mentor/Staff" if is_sm_staff else "Participant"
+                            context_lines.append(f"[{role_label}] {sm_author}: {sm.content}")
+                        situational_context = "Subsequent channel conversation:\n" + "\n".join(context_lines)
+
+                    # Process through cognitive should_reply decision with situational context
+                    should_reply, reply_reason = await self.classifier.should_reply(
                         content=cleaned,
                         is_bot_mentioned=bot_user in msg.mentions,
                         is_reply_to_bot=False,
+                        context=situational_context,
                         has_other_mentions=has_other_mentions,
                         is_reply_to_other=is_reply_to_other,
                     )
-                    if should_reply:
-                        await self.handle_message(msg, bot_user)
-                        replied_to_by_bot.add(msg.id)
-                        processed_count += 1
+                    if not should_reply:
+                        logger.info(
+                            "Catch-up skipping message %s from %s in #%s: %s",
+                            msg.id,
+                            msg.author,
+                            getattr(ch, "name", "channel"),
+                            reply_reason,
+                        )
+                        continue
+
+                    await self.handle_message(msg, bot_user, situational_context=situational_context)
+                    replied_to_by_bot.add(msg.id)
+                    processed_count += 1
 
         return processed_count

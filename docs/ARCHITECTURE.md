@@ -90,9 +90,13 @@ flowchart TD
   - 🟢 **Hacker** (`Hacker` role — only verified participants receive ambient answers)
 - **Peer-Mention & Reply Suppression**: Inspects `message.mentions`, `message.reference`, and regex patterns (`@username`). If a message is directed to another person, the bot stays silent.
 
-### Layer 3: Two-Stage Decision Layer
-- **Stage 1 (Heuristics)**: Microsecond regex evaluation filtering casual chatter, emojis, greetings, human mentor requests, peer discussions, and explicit teammate searches.
-- **Stage 2 (LLM Classification)**: Ambiguous messages are evaluated with context against the hackathon scope to determine whether an answer is genuinely warranted.
+### Layer 3: Two-Stage Decision Layer with Situational Awareness
+- **Stage 1 (Fast Heuristics)**: Microsecond regex evaluation filtering casual chatter, emojis, greetings, human mentor requests, peer discussions, author self-resolutions ("never mind", "got it thanks"), and explicit teammate searches.
+- **Stage 2 (Situational Context & LLM Classification)**: Evaluates the conversational situation in the channel:
+  - **See the Situation**: Examines all subsequent messages posted after the question.
+  - **Understand**: Detects if a human mentor/staff member (Admin, Moderator, Core Member, Volunteer, Judge) already answered, if someone tagged the author, or if the author acknowledged resolution.
+  - **Think & Deliberate**: Decides whether answering adds genuine value or would be redundant/intrusive over a human mentor.
+  - **Reply / Not Reply**: If already handled or answered by staff/peers -> **STAYS SILENT (NO REPLY)**. Only responds if the inquiry genuinely remains unaddressed.
 
 ### Layer 4: Knowledge, RAG & Live Sync Layer
 - **Dense Vector Search**: FAISS index built on 16 official hackathon documents spanning rules, schedules, venue details, submission criteria, FAQs, and prize tracks.
@@ -126,7 +130,7 @@ flowchart TD
 | **Cognitive Reasoning** | **Situational Anxiety De-escalation** | Participant expresses panic (e.g., last-minute PPT submission, prototype readiness, teammate dropouts). | 🟢 `Hacker` | Explains zero-penalty policy before deadline, advises 15-min Devfolio traffic buffer, and clarifies Round 1 PPT vs Round 2 Prototype requirements. | Internal `[THINK]` logs saved to server; Discord sees only clean mentor guidance. |
 | **Team Recruitment** | **Teammate Request Auto-Forwarding** | Hacker posts teammate recruitment in `#general` or `#ask-mentors` (e.g. *"I am finding teamates"*). | 🟢 `Hacker` / New Member | Forwards request to `#find-your-team` with `@everyone`, quote block, and jump link. Replies to user in chat. | 60-second user cooldown prevents `@everyone` ping spam. |
 | **Team Recruitment** | **In-Channel Team Search Response** | Hacker posts skill set and recruitment request inside `#find-your-team!`. | 🟢 `Hacker` / New Member | Replies in `#find-your-team!` tagging `@everyone` to maximize peer visibility. | Ignores casual greetings and non-recruitment chat in the channel. |
-| **Background Loop** | **Unanswered Message Catch-Up** | A participant's question or teammate search is left without reply (on bot boot or every 5 mins). | 🟢 `Hacker` | Scans recent channel history, answers unanswered queries, and forwards missed teammate searches. | Skips any message that already received a reply or mentions other users. |
+| **Background Loop** | **Unanswered Message Catch-Up with Situational Awareness** | A participant's question or teammate search was missed or left without reply (on bot boot or every 5 mins). | 🟢 `Hacker` | Scans recent channel history, answers genuinely unanswered queries, and forwards missed teammate searches. | **Situational Check**: Stays silent if a mentor/staff answered in subsequent messages, if someone tagged the author, if author self-resolved, or if Discord reply was used. Never talks over human mentors. |
 | **Live Web Sync** | **Real-Time Deadline & Schedule Updates** | Organizer updates Devfolio schedule or website (e.g. PPT deadline extension). | Everyone | Scrapes site every 15 minutes, indexes changes into FAISS, and answers participants with live dates. | Falls back to cached data if Devfolio or website is temporarily unreachable. |
 | **Admin Protection** | **Staff & Organizer Conversation Isolation** | Admin, Moderator, Core Member, Volunteer, or Judge chats or asks questions in ambient chat. | 🔴 `Admin`<br>🟣 `Moderator`<br>🔵 `Core Member`<br>🩷 `Volunteer`<br>🟡 `Judge` | **Bot stays completely silent.** Never interrupts human organizers or staff. | Verified via `_is_staff_or_bot()` and cached guild member roles. |
 | **Peer Conversation** | **Peer-to-Peer Discussion Filtering** | A user tags another participant (e.g. `@heyimsouvik What's the total size of your ppt?`) or replies inline. | Anyone | **Bot stays silent.** Does not intrude into conversations between two human members. | Evaluated via `has_other_mentions`, `is_reply_to_other`, and regex pings. |

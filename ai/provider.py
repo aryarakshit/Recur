@@ -109,12 +109,14 @@ Output NO if:
 - Participant status updates or announcements (e.g. "We finished our project", "Just submitted on Devfolio").
 - Casual chatter, reactions, or greetings to other humans (e.g. "bro lol", "hi everyone", "gg", "thanks!").
 - General knowledge or off-topic questions not about this hackathon (e.g. "what is the weather?", "solve this math problem").
+- ALREADY ANSWERED / HANDLED IN CHANNEL CONTEXT: If subsequent messages in the channel show that a mentor, organizer, or peer already answered the question, or if a staff member stepped in, or if the author already said "thanks" / "got it" / "never mind", STAY QUIET! Do not repeat or talk over mentors.
+- STALE TOPIC: The question is historical/stale and subsequent conversation has already moved on to other topics.
 
 Format:
 Output on a single line:
 YES: <brief description of situation and what the participant wants>
 or
-NO: <brief reason why bot should stay quiet>
+NO: <brief reason why bot should stay quiet (e.g. "Already answered by mentor in channel", "Banter", etc.)>
 """
 
 
@@ -313,6 +315,19 @@ class MockProvider(LLMProvider):
         self.provider_name = provider_name
 
     async def classify(self, message: str, context: Optional[str] = None) -> dict[str, Any]:
+        # Situational context check
+        if context:
+            ctx_lower = context.lower()
+            if any(term in ctx_lower for term in [
+                "already answered", "mentor/staff", "mentor answered", "staff answered",
+                "resolved", "handled", "thank you", "thanks", "got it", "understood", "all clear"
+            ]):
+                return {
+                    "should_reply": False,
+                    "confidence": 0.95,
+                    "reason": "Already answered or handled in channel context",
+                }
+
         # Simple heuristic fallback
         msg = message.lower()
         if any(w in msg for w in ["weather", "france", "joke", "math", "poem", "tree", "president", "capital"]):

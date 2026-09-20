@@ -216,6 +216,7 @@ class MessageClassifier:
             r"\b(?:which|what)\s+(?:tech\s+stack|framework|library|tools?)\s+are\s+(?:you|y'?all|you\s+guys)\s+using\b",
             r"\b(?:how\s+is\s+(?:everyone|everybody|y'?all|your\s+team)\s+(?:doing|going))\b",
             r"\b(?:anyone\s+want\s+to\s+(?:share|see|test))\b",
+            r"\b(?:anyone\s+(?:wants?|wanna|want)\s+to\s+(?:play|game|hang|chill|watch|call))\b",
             r"\b(?:is\s+it\s+just\s+me\s+or)\b",
         ]
         for pat in peer_patterns:
@@ -263,6 +264,10 @@ class MessageClassifier:
         if self.is_peer_conversation(clean):
             return False
 
+        # 6. Definite author self-resolution / acknowledgment (e.g. "never mind", "got it thanks")
+        if re.search(r"^\s*(?:never\s*mind|nevermind|nvm|got\s*it|all\s*good|all\s*clear|resolved)\b", clean):
+            return False
+
         # Identity questions directed at the bot
         if re.search(r"\b(who\s+are\s+you|what\s+are\s+you|who\s+is\s+recur|what\s+is\s+recur|tell\s+me\s+about\s+yourself|introduce\s+yourself)\b", clean):
             return True
@@ -308,6 +313,18 @@ class MessageClassifier:
         # Otherwise ambiguous / situational: message might be a conversational dilemma,
         # natural language question, or participant situation. Defer to LLM to understand what the participant wants!
         return None
+    def is_already_answered_in_context(self, context: str) -> bool:
+        """Determines if the situational context shows that a mentor, staff, or peer already answered or resolved."""
+        if not context:
+            return False
+        ctx = context.lower()
+        ack_phrases = [
+            "author acknowledged", "thank you", "thanks mentor", "got it thanks",
+            "thank you!", "thanks!", "understood, thanks", "makes sense, thanks",
+            "ok got it", "okay got it", "never mind", "nevermind", "all clear",
+            "already answered", "mentor/staff", "handled by staff",
+        ]
+        return any(p in ctx for p in ack_phrases)
 
     async def should_reply(
         self,
@@ -342,16 +359,21 @@ class MessageClassifier:
         if self.is_peer_conversation(content):
             return False, "Peer-to-peer discussion / chat among participants"
 
+        # Check situational context: If context clearly indicates already resolved or answered, stay silent!
+        if context and self.is_already_answered_in_context(context):
+            return False, "Already answered or resolved in channel context"
+
         # Rule 3: Fast heuristic check
         heuristic_result = self.evaluate_heuristics(content)
-        if heuristic_result is True:
-            return True, "Hackathon question identified by heuristic"
         if heuristic_result is False:
             return False, "Filtered out by noise/heuristic filter"
 
+        # If heuristic is True AND there is no subsequent context to evaluate, reply immediately
+        if heuristic_result is True and not context:
+            return True, "Hackathon question identified by heuristic"
 
-        # Rule 4: Ambiguous message -> Query LLM classifier
-        logger.info("Message is ambiguous ('%s'). Calling LLM classifier.", content)
+        # Rule 4: Ambiguous message OR message with subsequent channel context -> Query LLM classifier
+        logger.info("Evaluating message with situational context ('%s'). Calling LLM classifier.", content)
         try:
             res = await self.llm_provider.classify(message=content, context=context)
             should = bool(res.get("should_reply", False))
