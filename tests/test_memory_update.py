@@ -329,3 +329,41 @@ async def test_catch_up_unanswered_messages_in_memory_channel(memory_handler):
     assert count == 1
     missed_msg.reply.assert_called_once()
     assert "Memory Updated Successfully" in missed_msg.reply.call_args[0][0]
+
+
+def test_extract_chained_trigger_payload(memory_handler):
+    """Verifies that chained trigger phrases like 'update memory/ remember this:' extract clean information."""
+    text = '@Recur update memory/ remember this: if anyone asked for "Prize pool" say "not yet disclosed".'
+    payload = memory_handler._extract_memory_update(text, is_memory_channel=True)
+    assert payload == 'if anyone asked for "Prize pool" say "not yet disclosed".'
+
+
+def test_hybrid_retrieval_finds_memory_update(memory_handler):
+    """Verifies that 'so recur what is the pricepool?' correctly retrieves the organizer's memory update."""
+    from rag.retriever import KnowledgeRetriever
+    from rag.models import DocumentChunk
+    from ai.embeddings import LocalEmbeddingProvider
+
+    emb = LocalEmbeddingProvider()
+    mem_chunk = DocumentChunk(
+        chunk_id="memory_updates.md#0",
+        source="memory_updates.md",
+        section="Memory Update by aryarakshit (2026-09-21 02:04:00 UTC)",
+        updated_at="2026-09-21",
+        text='''Document: Recur Dynamic Memory & Live Organizer Updates (memory_updates.md)
+Section: Memory Update by aryarakshit (2026-09-21 02:04:00 UTC)
+
+- Channel: #recur-mem-update
+- Author: aryarakshit (101010)
+- Information:
+  if anyone asked for "Prize pool" say "not yet disclosed".''',
+        metadata={"doc_title": "Recur Dynamic Memory & Live Organizer Updates"},
+    )
+    retriever = KnowledgeRetriever(memory_handler.config.faiss_index_path, memory_handler.config.metadata_path, emb)
+    retriever.chunks.append(mem_chunk)
+
+    results = retriever.retrieve("so recur what is the pricepool?")
+    assert len(results) > 0
+    # Top result MUST be the memory update!
+    assert results[0].chunk.source == "memory_updates.md"
+    assert "not yet disclosed" in results[0].chunk.text

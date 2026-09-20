@@ -112,6 +112,8 @@ class MessageHandler:
         content = message.content
         # Remove <@id> or <@!id>
         content = re.sub(rf"<@!?{bot_user.id}>", "", content)
+        # Strip leading conversational bot address like "@Recur ", "so recur ", "recur "
+        content = re.sub(r"^(?:(?:so|hey|hi|yo|ok|okay)\s+)?(?:@?recur\s*[,:]?\s*)", "", content, flags=re.IGNORECASE)
         return content.strip()
 
     def _is_memory_update_channel(self, channel: Any) -> bool:
@@ -408,7 +410,14 @@ class MessageHandler:
             return None
 
         def _clean_payload(info_candidate: str) -> str:
-            return re.sub(r"^[\s.\-–—:]+", "", info_candidate).strip()
+            clean_p = re.sub(r"^[\s.\-–—:/]+", "", info_candidate).strip()
+            clean_p = re.sub(
+                r"^(?:(?:and\s+)?(?:also\s+)?(?:remember\s+this|remember\s+that|add\s+to\s+memory|add\s+this|update\s+memory|note)\s*[:\-–—./]*\s*)+",
+                "",
+                clean_p,
+                flags=re.IGNORECASE,
+            ).strip()
+            return clean_p
 
         # Explicit trigger patterns:
         # 1. "@recur add this info in your memory .. <info>" (or without @recur, or with "to")
