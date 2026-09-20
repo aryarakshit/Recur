@@ -84,3 +84,39 @@ async def test_generator_refuses_off_topic_query():
 
     assert was_fallback is False
     assert "Please ask me questions only related to this hackathon" in answer
+
+
+def test_clean_cognitive_response_section_headers():
+    from ai.generator import clean_cognitive_response
+
+    raw = """[READ]
+User asks about submitting late.
+[UNDERSTAND]
+They are stressed about cutoff penalties.
+[THINK & DELIBERATE]
+Official policy has zero penalty before cutoff.
+[REPLY]
+Submitting at the last minute has zero negative impact on selection! Just be sure to submit before the cutoff."""
+
+    answer, reasoning = clean_cognitive_response(raw)
+    assert answer == "Submitting at the last minute has zero negative impact on selection! Just be sure to submit before the cutoff."
+    assert "[READ]" in reasoning
+    assert "[UNDERSTAND]" in reasoning
+
+
+def test_clean_cognitive_response_xml_tags():
+    from ai.generator import clean_cognitive_response
+
+    raw = """<thinking>
+User wants to know team sizes. Rule is 2-4 members.
+</thinking>
+Teams must have between 2 and 4 members!
+
+Sources: rules.md"""
+
+    answer, reasoning = clean_cognitive_response(raw)
+    assert answer == "Teams must have between 2 and 4 members!"
+    assert "User wants to know team sizes" in reasoning
+    assert "<thinking>" not in answer
+    assert "Sources:" not in answer
+

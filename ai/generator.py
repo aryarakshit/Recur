@@ -26,6 +26,43 @@ OFF_TOPIC_REPLY = "Please ask me questions only related to this hackathon."
 IDENTITY_REPLY = "I am a bot for helping and providing any info about the hackathon."
 
 
+def clean_cognitive_response(raw_text: str, question: str = "") -> tuple[str, str]:
+    """Separates internal cognitive deliberation (Read, Understand, Think) from the user-facing reply.
+
+    Returns:
+        (clean_reply, reasoning_process)
+    """
+    cleaned = raw_text.strip()
+    reasoning = ""
+
+    # 1. XML tag extraction: <thinking>...</thinking> or <thought>...</thought>
+    thinking_match = re.search(r"<(?:thinking|thought)>(.*?)</(?:thinking|thought)>", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    if thinking_match:
+        reasoning = thinking_match.group(1).strip()
+        cleaned = re.sub(r"<(?:thinking|thought)>.*?</(?:thinking|thought)>", "", cleaned, flags=re.DOTALL | re.IGNORECASE).strip()
+
+    # 2. Section header extraction: [READ] ... [UNDERSTAND] ... [THINK & DELIBERATE] ... [REPLY]
+    reply_match = re.search(
+        r"(?:^|\n)\s*(?:\[\s*(?:REPLY|FINAL ANSWER|RESPONSE)\s*\]|4\.\s*\[\s*REPLY\s*\]:?)\s*\n?",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    if reply_match:
+        pre_reasoning = cleaned[:reply_match.start()].strip()
+        post_answer = cleaned[reply_match.end():].strip()
+        if post_answer:
+            reasoning = (reasoning + "\n" + pre_reasoning).strip() if reasoning else pre_reasoning
+            cleaned = post_answer
+
+    # 3. Strip unwanted trailing source footnotes (e.g. "\n\nSource: ...")
+    cleaned = re.sub(r"\n+(?:\*\*|__)?Sources?(?:\*\*|__)?\s*:.*$", "", cleaned, flags=re.IGNORECASE | re.DOTALL).strip()
+
+    if reasoning and question:
+        logger.info("Cognitive Deliberation for '%s':\n%s", question[:60], reasoning)
+
+    return cleaned, reasoning
+
+
 class AnswerGenerator:
     def __init__(
         self,
@@ -135,6 +172,9 @@ class AnswerGenerator:
                 organizer_tag=organizer_tag,
             )
 
+            # Clean cognitive reasoning from answer and log thought process
+            answer, _ = clean_cognitive_response(answer, question=question)
+
             if "only related to this hackathon" in answer.lower():
                 return OFF_TOPIC_REPLY, False
 
@@ -168,6 +208,7 @@ class AnswerGenerator:
                                 organizer_channel=channel,
                                 organizer_tag=organizer_tag,
                             )
+                            retry_answer, _ = clean_cognitive_response(retry_answer, question=question)
                             if not any(ind in retry_answer.lower() for ind in fallback_indicators):
                                 return retry_answer, False
                         except Exception as e:
@@ -175,9 +216,6 @@ class AnswerGenerator:
 
                 return SAFE_FALLBACK_TEMPLATE.format(organizer_tag=organizer_tag, channel=channel), True
 
-            if not is_fallback:
-                # Strip unwanted trailing source footnote (e.g. "\n\nSource: ...")
-                answer = re.sub(r"\n+(?:\*\*|__)?Sources?(?:\*\*|__)?\s*:.*$", "", answer, flags=re.IGNORECASE | re.DOTALL).strip()
             return answer, is_fallback
 
         except Exception as e:
