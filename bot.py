@@ -162,6 +162,7 @@ def main() -> None:
         memory=memory,
         database=db,
         config=config,
+        indexer=indexer,
     )
 
     # Check for Discord Token

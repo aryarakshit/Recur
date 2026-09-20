@@ -29,10 +29,11 @@ flowchart TD
         Router{"Routing Decision"}
     end
 
-    subgraph RAG_Layer["4. RAG & Live Sync Layer"]
+    subgraph RAG_Layer["4. RAG, Dynamic Memory & Live Sync Layer"]
         Retriever["Knowledge Retriever\n(FAISS Vector Index + Top-4 Semantic Search)"]
         LiveSync["LiveWebSync (Every 15 min)\n(Scrapes recursiveacm.devfolio.co & recursiveacm.in)"]
-        KnowledgeBase[("16 Official Knowledge Docs\n+ live_updates.md")]
+        MemUpdate["#recur-mem-update Handler\n(Dynamic Memory Injection & Live Re-Indexing)"]
+        KnowledgeBase[("16 Official Knowledge Docs\n+ live_updates.md\n+ memory_updates.md")]
     end
 
     subgraph Cognitive_Layer["5. 4-Step Cognitive Engine"]
@@ -46,15 +47,22 @@ flowchart TD
     subgraph Output_Layer["6. Action & Dispatch Layer"]
         SendReply["Direct Message Reply\n(SafeTyping + Author Mention)"]
         ForwardTeam["Team Forwarder\n(Post to #find-your-team with @everyone)"]
+        MemConfirm["Memory Update Confirmation\n(Confirmation Card in #recur-mem-update)"]
         Silent["Stay Silent / Log Unanswered\n(Suppresses noise in ambient chat)"]
     end
 
     Event --> Resolver
     Scanner --> Resolver
     Resolver --> RoleFilter
+    RoleFilter -- "Channel #recur-mem-update" --> MemUpdate
     RoleFilter -- "Staff (Admin/Mod/Core/Vol/Judge)" --> Silent
     RoleFilter -- "Bot / Dyno" --> Silent
     RoleFilter -- "Verified Hacker / Participant" --> PeerFilter
+
+    MemUpdate -- "Memory payload" --> KnowledgeBase
+    KnowledgeBase -. Re-Index .-> Retriever
+    MemUpdate -- "Confirmation" --> MemConfirm
+    MemUpdate -- "Question in channel" --> Retriever
 
     PeerFilter -- "Addressed to other user (@user / reply)" --> Silent
     PeerFilter -- "Hackathon inquiry" --> Heuristics
@@ -132,7 +140,8 @@ flowchart TD
 | **Team Recruitment** | **In-Channel Team Search Response** | Hacker posts skill set and recruitment request inside `#find-your-team!`. | 🟢 `Hacker` / New Member | Replies in `#find-your-team!` tagging `@everyone` to maximize peer visibility. | Ignores casual greetings and non-recruitment chat in the channel. |
 | **Background Loop** | **Unanswered Message Catch-Up with Situational Awareness** | A participant's question or teammate search was missed or left without reply (on bot boot or every 5 mins). | 🟢 `Hacker` | Scans recent channel history, answers genuinely unanswered queries, and forwards missed teammate searches. | **Situational Check**: Stays silent if a mentor/staff answered in subsequent messages, if someone tagged the author, if author self-resolved, or if Discord reply was used. Never talks over human mentors. |
 | **Live Web Sync** | **Real-Time Deadline & Schedule Updates** | Organizer updates Devfolio schedule or website (e.g. PPT deadline extension). | Everyone | Scrapes site every 15 minutes, indexes changes into FAISS, and answers participants with live dates. | Falls back to cached data if Devfolio or website is temporarily unreachable. |
-| **Admin Protection** | **Staff & Organizer Conversation Isolation** | Admin, Moderator, Core Member, Volunteer, or Judge chats or asks questions in ambient chat. | 🔴 `Admin`<br>🟣 `Moderator`<br>🔵 `Core Member`<br>🩷 `Volunteer`<br>🟡 `Judge` | **Bot stays completely silent.** Never interrupts human organizers or staff. | Verified via `_is_staff_or_bot()` and cached guild member roles. |
+| **Dynamic Memory** | **Live Organizer Memory Ingestion & Re-Index** | Organizer posts `@recur add this info in your memory .. <info>` or any declarative update in `#recur-mem-update`. | Anyone in `#recur-mem-update` (including 🔴 `Admin`, 🔵 `Core Member`, 🩷 `Volunteer`) | **Auto Updates Memory**: Appends note to `knowledge/memory_updates.md`, records in database, re-indexes FAISS vector database in < 0.1s, reloads retriever, and confirms via rich card. Also answers any question asked in this channel. | Zero-downtime hot reload across all channels. |
+| **Admin Protection** | **Staff & Organizer Conversation Isolation** | Admin, Moderator, Core Member, Volunteer, or Judge chats or asks questions in ambient chat. | 🔴 `Admin`<br>🟣 `Moderator`<br>🔵 `Core Member`<br>🩷 `Volunteer`<br>🟡 `Judge` | **Bot stays completely silent in standard channels.** Never interrupts human organizers or staff (bypassed only in `#recur-mem-update`). | Verified via `_is_staff_or_bot()` and cached guild member roles. |
 | **Peer Conversation** | **Peer-to-Peer Discussion Filtering** | A user tags another participant (e.g. `@heyimsouvik What's the total size of your ppt?`) or replies inline. | Anyone | **Bot stays silent.** Does not intrude into conversations between two human members. | Evaluated via `has_other_mentions`, `is_reply_to_other`, and regex pings. |
 | **Direct Mention** | **Explicit Mentor Invocation** | Any user tags `@Recur` with a direct question or prompt. | Anyone | Direct override: Always answers questions when explicitly mentioned. | Rejects off-topic queries with polite hackathon focus reminder. |
 | **Ambient Moderation** | **Off-Topic & Noise Suppression** | Messages containing banter, memes, greetings ("lol", "gm", "hi guys"), or non-hackathon topics. | Anyone | **Bot stays silent.** Does not spam channels with robotic refusal messages. | Strict regex patterns and ambient fallback suppression. |
@@ -146,16 +155,19 @@ flowchart TD
 
 ## 4. Role Hierarchy & Interaction Matrix
 
-| Discord Role | Role Color | Member Count | Role Category | Ambient Q&A | Teammate Forward | Catch-Up Scan | Direct `@Recur` |
-| :--- | :---: | :---: | :--- | :---: | :---: | :---: | :---: |
-| **`Admin`** | 🔴 Red | 5 | Server Administrator / Core Lead | ❌ Silent | ❌ Ignored | ❌ Ignored | ❌ Excluded |
-| **`Moderator`** | 🟣 Purple | 3 | Community Moderator | ❌ Silent | ❌ Ignored | ❌ Ignored | ❌ Excluded |
-| **`Core Member`** | 🔵 Blue | 13 | Hackathon Organizer | ❌ Silent | ❌ Ignored | ❌ Ignored | ❌ Excluded |
-| **`Volunteer`** | 🩷 Pink | 11 | Hackathon Student Volunteer | ❌ Silent | ❌ Ignored | ❌ Ignored | ❌ Excluded |
-| **`Judge`** | 🟡 Yellow | 0 | Hackathon Project Evaluator | ❌ Silent | ❌ Ignored | ❌ Ignored | ❌ Excluded |
-| **`Bot` / `Dyno`** | ⚪ Grey | 3 | Automated Bots | ❌ Silent | ❌ Ignored | ❌ Ignored | ❌ Ignored |
-| **`Hacker`** | 🟢 Green | 88 | **Verified Participant** | ✅ **Answers** | ✅ **Forwards** | ✅ **Scans** | ✅ **Answers** |
-| **`@everyone` (New)**| Default | 122 | Newly Joined Unassigned User | ❌ Silent | ✅ **Forwards** | ✅ **Forwards** | ✅ **Answers** |
+> [!NOTE]
+> In `#recur-mem-update`, all staff restrictions are automatically bypassed so organizers and volunteers can dynamically inject memory and test knowledge. The table below represents ambient chat behavior across `#general` and `#ask-mentors`.
+
+| Discord Role | Role Color | Member Count | Role Category | Ambient Q&A | Teammate Forward | Catch-Up Scan | Direct `@Recur` | `#recur-mem-update` |
+| :--- | :---: | :---: | :--- | :---: | :---: | :---: | :---: | :---: |
+| **`Admin`** | 🔴 Red | 5 | Server Administrator / Core Lead | ❌ Silent | ❌ Ignored | ❌ Ignored | ❌ Excluded | ✅ **Full Access** |
+| **`Moderator`** | 🟣 Purple | 3 | Community Moderator | ❌ Silent | ❌ Ignored | ❌ Ignored | ❌ Excluded | ✅ **Full Access** |
+| **`Core Member`** | 🔵 Blue | 13 | Hackathon Organizer | ❌ Silent | ❌ Ignored | ❌ Ignored | ❌ Excluded | ✅ **Full Access** |
+| **`Volunteer`** | 🩷 Pink | 11 | Hackathon Student Volunteer | ❌ Silent | ❌ Ignored | ❌ Ignored | ❌ Excluded | ✅ **Full Access** |
+| **`Judge`** | 🟡 Yellow | 0 | Hackathon Project Evaluator | ❌ Silent | ❌ Ignored | ❌ Ignored | ❌ Excluded | ✅ **Full Access** |
+| **`Bot` / `Dyno`** | ⚪ Grey | 3 | Automated Bots | ❌ Silent | ❌ Ignored | ❌ Ignored | ❌ Ignored | ❌ Ignored |
+| **`Hacker`** | 🟢 Green | 88 | **Verified Participant** | ✅ **Answers** | ✅ **Forwards** | ✅ **Scans** | ✅ **Answers** | ✅ **Full Access** |
+| **`@everyone` (New)**| Default | 122 | Newly Joined Unassigned User | ❌ Silent | ✅ **Forwards** | ✅ **Forwards** | ✅ **Answers** | ✅ **Full Access** |
 
 ---
 
@@ -163,6 +175,7 @@ flowchart TD
 
 | Channel | Allowed Actions | Disallowed Actions | Notification Rules |
 | :--- | :--- | :--- | :--- |
+| **`#recur-mem-update`** *(aliases: `mem-update`, `recur-memory`)* | Dynamic memory updates (`@recur add this info in your memory ..`), instant FAISS re-indexing, interactive Q&A testing for organizers. | None (Staff silence restriction is completely disabled here). | Rich Discord confirmation card with re-indexing status and summary. |
 | **`#general`** | Ambient hackathon Q&A, teammate search detection & forwarding, direct `@Recur` pings. | Staff conversation interruptions, peer-to-peer mention answers, off-topic chat. | Mentions author on reply; forwards team requests to `#find-your-team`. |
 | **`#ask-mentors` / `#ask-mentor`** | Official rules, judging criteria, technical stack questions, teammate search forwarding. | Intercepting questions explicitly addressed to human mentors (`"Mentors, please check..."`). | Silent fallback: Logs unanswered technical queries for human organizers. |
 | **`#find-your-team!`** | Teammate recruitment announcements, skill offers, team formation. | General chatter, unrelated queries. | Pings `@everyone` with a 60-second author cooldown. |

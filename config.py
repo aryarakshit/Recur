@@ -91,6 +91,21 @@ class Config:
         if os.getenv("TEAM_FINDING_CHANNEL_ID", "").strip().isdigit()
         else None
     )
+    memory_channel_names: list[str] = field(
+        default_factory=lambda: [
+            c.strip().lower().lstrip("#")
+            for c in os.getenv(
+                "MEMORY_CHANNEL_NAMES",
+                "recur-mem-update,recur-mem-updates,recur-memory,mem-update,memory-update,recur-update",
+            ).split(",")
+            if c.strip()
+        ]
+    )
+    memory_channel_id: int | None = field(
+        default_factory=lambda: int(os.getenv("MEMORY_CHANNEL_ID", "0"))
+        if os.getenv("MEMORY_CHANNEL_ID", "").strip().isdigit()
+        else None
+    )
 
 
     # LLM settings

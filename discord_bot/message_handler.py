@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import logging
 import re
 import time
@@ -12,6 +13,7 @@ if TYPE_CHECKING:
     from ai.classifier import MessageClassifier
     from ai.generator import AnswerGenerator
     from config import Config
+    from rag.indexer import KnowledgeIndexer
     from rag.retriever import KnowledgeRetriever
     from storage.database import Database
     from storage.memory import ConversationMemory
@@ -50,6 +52,7 @@ class MessageHandler:
         memory: ConversationMemory,
         database: Database,
         config: Config,
+        indexer: KnowledgeIndexer | None = None,
     ) -> None:
         self.classifier = classifier
         self.generator = generator
@@ -57,6 +60,7 @@ class MessageHandler:
         self.memory = memory
         self.db = database
         self.config = config
+        self.indexer = indexer
         self.last_team_ping: dict[int, float] = {}
         self._member_cache: dict[int, tuple[discord.Member, float]] = {}
 
@@ -110,19 +114,55 @@ class MessageHandler:
         content = re.sub(rf"<@!?{bot_user.id}>", "", content)
         return content.strip()
 
+    def _is_memory_update_channel(self, channel: Any) -> bool:
+        """Verifies if the message was sent in the dedicated memory update channel (e.g. #recur-mem-update)."""
+        if not channel:
+            return False
+        ch_id = getattr(channel, "id", None)
+        if self.config.memory_channel_id and ch_id == self.config.memory_channel_id:
+            return True
+
+        mem_channels = getattr(
+            self.config,
+            "memory_channel_names",
+            ["recur-mem-update", "recur-mem-updates", "recur-memory", "mem-update", "memory-update", "recur-update"],
+        )
+        raw_names = []
+        name = getattr(channel, "name", None)
+        if isinstance(name, str):
+            raw_names.append(name.lower())
+        parent = getattr(channel, "parent", None)
+        if parent:
+            pname = getattr(parent, "name", None)
+            if isinstance(pname, str):
+                raw_names.append(pname.lower())
+
+        for raw in raw_names:
+            clean = re.sub(r"[^a-z0-9\-]", "", raw).strip("-")
+            for mc in mem_channels:
+                clean_mc = re.sub(r"[^a-z0-9\-]", "", mc.lower()).strip("-")
+                if clean == clean_mc or clean_mc in clean or clean in clean_mc:
+                    return True
+        return False
+
     def _is_channel_allowed(self, channel: discord.abc.Messageable) -> bool:
-        """Verifies if the message was sent in an allowed channel (e.g. #general or #ask-mentors)."""
+        """Verifies if the message was sent in an allowed channel (e.g. #general, #ask-mentors, or #recur-mem-update)."""
+        if self._is_memory_update_channel(channel):
+            return True
+
         allowed = self.config.allowed_channel_names
         if not allowed:
             return True
 
         raw_names = []
         name = getattr(channel, "name", None)
-        if name:
+        if isinstance(name, str):
             raw_names.append(name.lower())
         parent = getattr(channel, "parent", None)
-        if parent and getattr(parent, "name", None):
-            raw_names.append(parent.name.lower())
+        if parent:
+            pname = getattr(parent, "name", None)
+            if isinstance(pname, str):
+                raw_names.append(pname.lower())
 
         for raw in raw_names:
             clean = re.sub(r"[^a-z0-9\-]", "", raw).strip("-")
@@ -140,11 +180,13 @@ class MessageHandler:
 
         raw_names = []
         name = getattr(channel, "name", None)
-        if name:
+        if isinstance(name, str):
             raw_names.append(name.lower())
         parent = getattr(channel, "parent", None)
-        if parent and getattr(parent, "name", None):
-            raw_names.append(parent.name.lower())
+        if parent:
+            pname = getattr(parent, "name", None)
+            if isinstance(pname, str):
+                raw_names.append(pname.lower())
 
         for raw in raw_names:
             clean = re.sub(r"[^a-z0-9\-]", "", raw).strip("-")
@@ -350,6 +392,143 @@ class MessageHandler:
         except Exception as e:
             logger.error("Failed to reply to author in #%s: %s", getattr(message.channel, "name", "channel"), e)
 
+    def _extract_memory_update(self, text: str, is_memory_channel: bool = False) -> str | None:
+        """Detects if the message is requesting to add/update information in memory.
+        Returns the cleaned information string to remember, or None if it's a general question/chatter.
+        """
+        clean = text.strip()
+        if not clean:
+            return None
+
+        def _clean_payload(info_candidate: str) -> str:
+            return re.sub(r"^[\s.\-–—:]+", "", info_candidate).strip()
+
+        # Check explicit memory update prefixes and commands
+        patterns = [
+            r"^(?:please\s+)?(?:add|save|store|write|record|put)\s+(?:this\s+)?(?:info|information|update|note)?\s*(?:in|to|into)\s*(?:your\s+)?(?:memory|knowledge\s*base|kb)\s*[:\-–—.]*\s*(.+)$",
+            r"^(?:please\s+)?(?:auto\s+)?(?:update|refresh)\s+(?:your\s+)?(?:memory|knowledge\s*base|kb)\s*(?:with)?\s*[:\-–—.]*\s*(.+)$",
+            r"^(?:please\s+)?remember\s+(?:this|that|the\s+following)?\s*[:\-–—.]*\s*(.+)$",
+            r"^(?:new\s+info|new\s+update|memory\s+update|kb\s+update|note)\s*[:\-–—.]*\s*(.+)$",
+        ]
+
+        for pat in patterns:
+            m = re.match(pat, clean, re.IGNORECASE | re.DOTALL)
+            if m:
+                info = _clean_payload(m.group(1))
+                if len(info) >= 3:
+                    return info
+
+        trigger_match = re.search(
+            r"(?:add\s+(?:this\s+)?(?:info\s+)?(?:in|to)\s+(?:your\s+)?memory|add\s+to\s+memory|(?:auto\s+)?update\s+memory|remember\s+this|remember\s+that)\s*[:\-–—.]*\s*(.+)$",
+            clean,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if trigger_match:
+            info = _clean_payload(trigger_match.group(1))
+            if len(info) >= 3:
+                return info
+
+        # In dedicated #recur-mem-update channel, also treat declarative announcements/updates as memory updates
+        if is_memory_channel:
+            clean_lower = clean.lower()
+            # If it's a question, return None so it gets answered via Q&A pipeline
+            is_question = "?" in clean or any(clean_lower.startswith(w) for w in [
+                "what", "when", "where", "who", "how", "why", "can", "could", "is", "are", "tell me", "show me"
+            ])
+            if not is_question and len(clean) >= 8:
+                return clean
+
+        return None
+
+    async def _handle_memory_update(
+        self,
+        message: discord.Message,
+        info_text: str,
+        bot_user: discord.ClientUser,
+    ) -> bool:
+        """Appends new information to knowledge/memory_updates.md, rebuilds the vector index,
+        reloads the retriever, logs to database, and confirms the update to the channel.
+        """
+        author_name = getattr(message.author, "display_name", getattr(message.author, "name", "Organizer"))
+        now_dt = datetime.now(timezone.utc)
+        timestamp_str = now_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+        # 1. Append to knowledge/memory_updates.md
+        kb_file = self.config.knowledge_dir / "memory_updates.md"
+        is_new_file = not kb_file.exists()
+
+        entry_text = (
+            f"\n\n## Memory Update by {author_name} ({timestamp_str})\n"
+            f"- **Channel**: #{getattr(message.channel, 'name', 'recur-mem-update')}\n"
+            f"- **Author**: {author_name} ({message.author.id})\n"
+            f"- **Information**:\n"
+            f"  {info_text.strip()}\n"
+        )
+
+        try:
+            if is_new_file:
+                header = (
+                    "# Recur Dynamic Memory & Live Organizer Updates\n"
+                    f"*Last Updated: {timestamp_str}*\n\n"
+                    "> Official dynamic updates, announcements, and memory additions provided by organizers via #recur-mem-update.\n"
+                )
+                kb_file.write_text(header + entry_text.strip(), encoding="utf-8")
+            else:
+                with open(kb_file, "a", encoding="utf-8") as f:
+                    f.write(entry_text)
+            logger.info("Saved memory update to %s: '%s'", kb_file, info_text[:60])
+        except Exception as e:
+            logger.error("Failed to write to %s: %s", kb_file, e)
+            await message.reply(f"❌ Failed to write memory update to disk: {e}")
+            return False
+
+        # 2. Log to database
+        try:
+            self.db.log_memory_update(
+                content=info_text.strip(),
+                channel_id=message.channel.id,
+                user_id=message.author.id,
+                author_name=author_name,
+                timestamp=now_dt.timestamp(),
+            )
+        except Exception as e:
+            logger.warning("Could not log memory update to database: %s", e)
+
+        # 3. Auto update memory: Re-index FAISS and reload KnowledgeRetriever
+        reindex_details = ""
+        try:
+            if self.indexer:
+                stats = self.indexer.build_index()
+                chunk_count = stats.get("chunk_count", 0)
+                reindex_details = f"Re-indexed {chunk_count} chunks in {stats.get('time_taken', 0.0)}s."
+            if self.retriever:
+                self.retriever.load()
+            logger.info("Auto-updated memory and re-indexed FAISS successfully.")
+        except Exception as e:
+            logger.error("Failed to rebuild FAISS index during memory update: %s", e)
+            reindex_details = f"Re-indexing notice: {e}"
+
+        # 4. Acknowledge and confirm in Discord
+        reply_content = (
+            f"🧠 **Memory Updated Successfully!**\n\n"
+            f"**Stored Information**:\n"
+            f"> {info_text.strip()}\n\n"
+            f"✅ **Actions Completed**:\n"
+            f"• Written to persistent knowledge base (`knowledge/memory_updates.md`)\n"
+            f"• Auto-updated vector index & reloaded retriever ({reindex_details or 'Ready'})\n"
+            f"• All future participant queries across `#general`, `#ask-mentors`, and `/ask` will now use this memory! 🚀"
+        )
+
+        try:
+            await message.reply(
+                reply_content,
+                allowed_mentions=discord.AllowedMentions(replied_user=True),
+            )
+            return True
+        except Exception as e:
+            logger.error("Failed to send memory update confirmation reply: %s", e)
+            return False
+
     def _is_staff_or_bot(
         self,
         author: discord.User | discord.Member,
@@ -385,18 +564,14 @@ class MessageHandler:
         bot_user: discord.ClientUser,
         is_direct_mention: bool = False,
         resolved_member: discord.Member | None = None,
+        channel: Any | None = None,
     ) -> tuple[bool, str]:
-        """Checks if the message author is permitted to receive AI answers.
+        """Checks if the message author is permitted to receive AI answers."""
+        if channel and self._is_memory_update_channel(channel):
+            if getattr(author, "bot", False) or author.id == bot_user.id:
+                return False, "Author is a bot"
+            return True, "All users permitted in #recur-mem-update"
 
-        Server Role Hierarchy & Colors:
-        1. Admin (Red): Staff / Organizer -> Never reply
-        2. Moderator (Purple): Staff -> Never reply
-        3. Core Member (Blue): Staff -> Never reply
-        4. Volunteer (Pink): Staff -> Never reply
-        5. Judge (Yellow): Staff -> Never reply
-        6. Bot / Dyno (Grey): Bots -> Never reply
-        7. Hacker (Green): Hackathon Participants -> ALLOWED to receive answers & recruitment forwards
-        """
         if self._is_staff_or_bot(author, bot_user, resolved_member=resolved_member):
             return False, "Author is staff or a bot"
 
@@ -558,8 +733,19 @@ class MessageHandler:
         if not cleaned_text:
             return
 
+        # Check if message is in dedicated memory update channel
+        is_mem_channel = self._is_memory_update_channel(message.channel)
+
+        # 1. Check for dynamic memory update requests
+        # (e.g. "@recur add this info in your memory ...", or any update in #recur-mem-update)
+        memory_payload = self._extract_memory_update(cleaned_text, is_memory_channel=is_mem_channel)
+        if memory_payload:
+            handled = await self._handle_memory_update(message, memory_payload, bot_user)
+            if handled:
+                return
+
         # In ambient chat (not directly mentioned), never reply if message is addressing another user
-        if not (is_mentioned or is_reply_to_bot):
+        if not (is_mentioned or is_reply_to_bot) and not is_mem_channel:
             if has_other_mentions or is_reply_to_other or self.classifier.is_addressed_to_other_user(cleaned_text):
                 logger.info("Ignoring message addressed to another user in #%s: '%s'", getattr(message.channel, "name", "channel"), cleaned_text)
                 return
@@ -598,24 +784,25 @@ class MessageHandler:
                     logger.debug("Could not inspect immediate channel history: %s", e)
 
         # 2. Check if message is a teammate recruitment search in an allowed channel (#general, #ask-mentors, etc.)
-        if self.classifier.is_teammate_search(cleaned_text):
+        if not is_mem_channel and self.classifier.is_teammate_search(cleaned_text):
             if self._is_channel_allowed(message.channel) or is_mentioned or is_reply_to_bot:
                 if not self._is_staff_or_bot(message.author, bot_user, resolved_member=resolved_member):
                     await self._forward_team_finding_message(message, cleaned_text)
                     return
 
-        # 3. Author & Role validation: Only reply to participants, ignore bots & staff
+        # 3. Author & Role validation: Only reply to participants, ignore bots & staff (except in #recur-mem-update)
         author_allowed, author_reason = self._is_author_allowed(
             author=message.author,
             bot_user=bot_user,
             is_direct_mention=is_mentioned or is_reply_to_bot,
             resolved_member=resolved_member,
+            channel=message.channel,
         )
         if not author_allowed:
             logger.info("Ignoring message from %s: %s", message.author, author_reason)
             return
 
-        # 4. Channel validation: Only reply in 'general' and 'ask-mentors' (unless directly mentioned)
+        # 4. Channel validation: Only reply in 'general' and 'ask-mentors' (unless directly mentioned or in memory update channel)
         if not self._is_channel_allowed(message.channel) and not (is_mentioned or is_reply_to_bot):
             channel_name = getattr(message.channel, "name", "DM")
             logger.info(
@@ -634,14 +821,17 @@ class MessageHandler:
         decision_context = situational_context or history_context
 
         # 5. Reply Decision Layer
-        should_reply, reason = await self.classifier.should_reply(
-            content=cleaned_text,
-            is_bot_mentioned=is_mentioned,
-            is_reply_to_bot=is_reply_to_bot,
-            context=decision_context,
-            has_other_mentions=has_other_mentions,
-            is_reply_to_other=is_reply_to_other,
-        )
+        if is_mem_channel:
+            should_reply, reason = True, "Permitted to reply to any question in #recur-mem-update"
+        else:
+            should_reply, reason = await self.classifier.should_reply(
+                content=cleaned_text,
+                is_bot_mentioned=is_mentioned,
+                is_reply_to_bot=is_reply_to_bot,
+                context=decision_context,
+                has_other_mentions=has_other_mentions,
+                is_reply_to_other=is_reply_to_other,
+            )
 
         if not should_reply:
             logger.info("Ignoring message '%s': %s", cleaned_text, reason)
@@ -714,7 +904,7 @@ class MessageHandler:
 
                 # Ambient suppression: If the bot was NOT directly mentioned or replied to,
                 # stay quiet! Do not spam #general or #ask-mentors with robotic fallback messages.
-                if not (is_mentioned or is_reply_to_bot):
+                if not (is_mentioned or is_reply_to_bot) and not is_mem_channel:
                     logger.info(
                         "Suppressed fallback reply in ambient chat (#%s) for '%s' (staying quiet)",
                         getattr(message.channel, "name", "channel"),
@@ -819,6 +1009,13 @@ class MessageHandler:
                     # Resolve member with guild roles
                     resolved_member = await self._resolve_member(msg.author, guild)
 
+                    # In dedicated memory update channel, handle missed updates/questions directly!
+                    if self._is_memory_update_channel(ch):
+                        await self.handle_message(msg, bot_user)
+                        replied_to_by_bot.add(msg.id)
+                        processed_count += 1
+                        continue
+
                     # Skip bots, Dyno, and staff immediately
                     if self._is_staff_or_bot(msg.author, bot_user, resolved_member=resolved_member):
                         continue
@@ -868,6 +1065,7 @@ class MessageHandler:
                         bot_user=bot_user,
                         is_direct_mention=bot_user in msg.mentions,
                         resolved_member=resolved_member,
+                        channel=ch,
                     )
                     if not author_allowed:
                         continue

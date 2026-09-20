@@ -70,6 +70,18 @@ class Database:
                     updated_at REAL NOT NULL
                 )
             """)
+
+            # 4. Dynamic memory updates table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS memory_updates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content TEXT NOT NULL,
+                    channel_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    author_name TEXT NOT NULL,
+                    timestamp REAL NOT NULL
+                )
+            """)
             conn.commit()
 
     def log_unanswered_question(
@@ -217,3 +229,53 @@ class Database:
                 except Exception:
                     return row["value"]
             return default
+
+    def log_memory_update(
+        self,
+        content: str,
+        channel_id: str | int,
+        user_id: str | int,
+        author_name: str,
+        timestamp: float | None = None,
+    ) -> int:
+        """Logs a dynamic memory update provided by organizers."""
+        ts = timestamp if timestamp is not None else time.time()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO memory_updates (content, channel_id, user_id, author_name, timestamp)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (content.strip(), str(channel_id), str(user_id), author_name.strip(), ts),
+            )
+            conn.commit()
+            last_id = cursor.lastrowid or 0
+            logger.info("Logged memory update #%d from %s (%s)", last_id, author_name, user_id)
+            return last_id
+
+    def get_memory_updates(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Retrieves past dynamic memory updates."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, content, channel_id, user_id, author_name, timestamp
+                FROM memory_updates
+                ORDER BY timestamp DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            rows = cursor.fetchall()
+            return [
+                {
+                    "id": row["id"],
+                    "content": row["content"],
+                    "channel_id": row["channel_id"],
+                    "user_id": row["user_id"],
+                    "author_name": row["author_name"],
+                    "timestamp": row["timestamp"],
+                }
+                for row in rows
+            ]
