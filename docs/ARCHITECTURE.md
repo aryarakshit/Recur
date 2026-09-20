@@ -7,7 +7,7 @@
 
 ## 1. System Architecture Overview
 
-The system is built as a multi-tier, event-driven agentic platform designed to run 24/7 on Discord with zero-lag retrieval, strict role-based access control, periodic background sync, and an empathetic 4-step cognitive reasoning engine.
+The system is built as a multi-tier, event-driven agentic platform designed to run **24/7 on Discord** with zero-lag retrieval, strict role-based access control, periodic background sync, and an empathetic 4-step cognitive reasoning engine.
 
 ```mermaid
 flowchart TD
@@ -85,8 +85,9 @@ flowchart TD
 
 ### Layer 1: Discord Ingestion & Gateway Layer
 - **`bot.py`**: Initializes `commands.Bot` with `intents.message_content = True`. Privileged gateway `intents.members` is intentionally set to `False` to prevent `PrivilegedIntentsRequired` gateway connection crashes when Server Members Intent is not toggled in developer portal.
-- **Health Check & Keep-Alive**: Runs an internal multi-threaded HTTP server (`0.0.0.0:7860`) returning `200 OK` for continuous uptime on Render and a 9-minute self-ping loop preventing container sleep.
+- **Health Check & Keep-Alive**: Runs an internal multi-threaded HTTP server (`0.0.0.0:7860`) returning `200 OK` for continuous uptime on Render/Hugging Face Spaces and a 9-minute self-ping loop preventing container sleep/idle on free tiers.
 - **Background Scanner**: Uses `discord.ext.tasks.loop(minutes=5)` to scan `#general`, `#ask-mentors`, and `#recur-mem-update` for unanswered questions or missed teammate searches.
+- **Auto-Reconnection Loop**: Discord connection wrapped in infinite retry loop with exponential backoff (5s → 60s max) handling `GatewayNotFound`, `ConnectionClosed`, and `LoginFailure`.
 
 ### Layer 2: Role, Permission & Peer Filtering Layer
 - **`_resolve_member()`**: Resolves raw `discord.User` instances from history into full `discord.Member` objects via guild cache or Discord HTTP REST API (`guild.fetch_member()`), backed by a 300-second in-memory TTL cache. This bypasses the need for privileged gateway intents entirely.
@@ -117,20 +118,21 @@ flowchart TD
   - **Dense Vector Search**: FAISS index built on 16 official hackathon documents spanning rules, schedules, venue details, submission criteria, FAQs, and prize tracks.
   - **Lexical Keyword Overlap**: Content keyword matching with English stop-word filtering prevents generic documents (like `chair.md`) from dominating short queries.
   - **Dynamic Organizer Memory Priority**: All entries in `knowledge/memory_updates.md` are evaluated across a 25-candidate window and given an organizer priority boost (`+0.35`) when query keywords match live organizer directives.
-- **`LiveWebSync` (Periodic Scraper)**: Scrapes `https://recursiveacm.devfolio.co/` and `https://recursiveacm.in` every 15 minutes, automatically updating `knowledge/live_updates.md` and triggering incremental FAISS re-indexing.
+- **`LiveWebSync` (Periodic Scraper)**: **Runs every 15 minutes (900s) as a daemon thread**, scraping `https://recursiveacm.devfolio.co/` (API + schedule page) and `https://recursiveacm.in`, automatically updating `knowledge/live_updates.md` and triggering incremental FAISS re-indexing. Rate-limited to max 1 fetch per 60s unless forced via `/sync` command.
 - **Dynamic Memory Ingestion & Removal (`#recur-mem-update`)**:
-  - **Memory Ingestion Triggers**:
+  - **Memory Ingestion Triggers** (4 patterns):
     1. `@recur add this info in your memory .. <info>`
     2. `add to memory: <info>`
     3. `auto update memory: <info>`
     4. `remember this: <info>`
-  - **Memory Removal Triggers**:
+  - **Memory Removal Triggers** (7 patterns):
     1. `@recur remove this info from your memory .. <target>`
-    2. `remove from memory: <target>`
-    3. `remove from mem: <target>`
-    4. `remove mem: <target>`
-    5. `delete from memory: <target>`
-    6. `forget this: <target>`
+    2. `@recur remove from memory: <target>`
+    3. `remove from memory: <target>`
+    4. `remove from mem: <target>`
+    5. `remove mem: <target>`
+    6. `delete from memory: <target>`
+    7. `forget this: <target>`
   - Automatically writes or purges entries from `memory_updates.md`, updates the SQLite database, rebuilds FAISS vectors in `< 0.1s`, and hot-reloads the retriever with zero downtime.
   - All other messages are handled as normal conversation.
 
@@ -149,12 +151,46 @@ flowchart TD
   - **Greeting Moderation**: Automatically strips boilerplate `"Hi there!"` / `"Hey there! 👋"` when the participant asked a direct question without greeting, diving straight into the core answer. Greetings are only preserved if the participant explicitly greeted first.
 
 ### Layer 6: Action & Persistence Layer
-- **`Database` (SQLite)**: Logs queries, latency, token usage, unanswered questions, and system metrics.
+- **`Database` (SQLite with WAL mode)**: Logs queries, latency, token usage, unanswered questions, and system metrics. Configured with `PRAGMA journal_mode = WAL`, `PRAGMA synchronous = NORMAL`, `PRAGMA busy_timeout = 30000` for high-concurrency reads/writes.
 - **`ConversationMemory`**: Sliding-window context store (up to 6 turns per user/channel) supporting natural multi-turn conversations.
 
 ---
 
-## 3. What Can Recur Do? (Capabilities Matrix)
+## 3. 24/7 Operation & Heavy Demand Resilience
+
+### Deployment Strategies (All Production-Ready)
+| Platform | Configuration | Auto-Restart | Health Check |
+|----------|--------------|--------------|--------------|
+| **Docker / Docker Compose** | `docker-compose.yml` with `restart: unless-stopped` | ✅ Container-level | HTTP 200 on :7860 |
+| **systemd (Linux VM)** | `deploy/hackbot.service` with `Restart=always`, `RestartSec=10` | ✅ Service-level | HTTP 200 on :7860 |
+| **Render (Free Tier)** | `render.yaml` web service, auto-deploys from Git | ✅ Platform-level | HTTP 200 on :7860 + 9-min self-ping |
+| **Hugging Face Spaces** | `Dockerfile` with `EXPOSE 7860` | ✅ Platform-level | HTTP 200 on :7860 |
+
+### Concurrency & Heavy Demand Handling
+- **SQLite WAL Mode**: `journal_mode=WAL` allows concurrent readers + single writer without locking bottlenecks. `busy_timeout=30000` prevents "database is locked" under burst load.
+- **Discord Gateway Resilience**: 
+  - `reconnect=True` in `bot.run()` enables automatic WebSocket reconnection.
+  - Application-level exponential backoff (5s → 10s → 20s → 40s → 60s cap) for `GatewayNotFound`, `ConnectionClosed`, and generic exceptions.
+  - `on_disconnect` / `on_resumed` logging for observability.
+- **Rate Limiting & Cooldowns**:
+  - **Live Sync**: Max 1 fetch per 60s (configurable), enforced via `threading.Lock` + timestamp check.
+  - **Teammate Forward**: 60s per-user cooldown prevents `@everyone` ping spam.
+  - **LLM Token Budget**: `max_tokens=700` stays under Groq 1000 OTPM limit; automatic failover to backup model on 429.
+  - **HTTP Timeouts**: 8s for Devfolio/website scrapes, 10s for keep-alive pings, 30s SQLite busy timeout.
+- **Background Daemon Threads** (all `daemon=True`):
+  - LiveWebSync (15 min interval, 30s startup delay)
+  - Keep-Alive Ping (9 min interval, 3 min startup delay)
+  - Health Check HTTP Server (non-blocking `serve_forever`)
+  - Discord periodic catch-up task (5 min interval via `discord.ext.tasks`)
+
+### Memory & Knowledge Persistence
+- **FAISS Index**: Persisted to `data/faiss.index` + `data/metadata.json` — survives container restarts.
+- **SQLite Database**: `data/hackbot.db` with WAL — survives restarts, tracks all queries, unanswered questions, conversation history, and dynamic memory updates.
+- **Knowledge Files**: 16 static `.md` files in `knowledge/` + `live_updates.md` (auto-updated every 15 min) + `memory_updates.md` (organizer-controlled) — all version-controlled in Git.
+
+---
+
+## 4. What Can Recur Do? (Capabilities Matrix)
 
 | Category | Capability | Trigger Condition | Target Audience | Behavior & Output | Safety & Safeguards |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -177,7 +213,7 @@ flowchart TD
 
 ---
 
-## 4. Role Hierarchy & Interaction Matrix
+## 5. Role Hierarchy & Interaction Matrix
 
 > [!NOTE]
 > In `#recur-mem-update`, all staff restrictions are automatically bypassed so organizers and volunteers can dynamically inject memory and test knowledge. The table below represents ambient chat behavior across `#general` and `#ask-mentors`.
@@ -195,7 +231,7 @@ flowchart TD
 
 ---
 
-## 5. Channel Routing Matrix
+## 6. Channel Routing Matrix
 
 | Channel | Allowed Actions | Disallowed Actions | Notification Rules |
 | :--- | :--- | :--- | :--- |
@@ -208,7 +244,7 @@ flowchart TD
 
 ---
 
-## 6. End-to-End Interaction Flow
+## 7. End-to-End Interaction Flow
 
 ```mermaid
 sequenceDiagram
@@ -264,3 +300,133 @@ sequenceDiagram
     LLM-->>Handler: "The prize pool is not yet disclosed..."
     Handler->>Discord: Reply to Hacker
 ```
+
+---
+
+## 8. Configuration & Environment Variables
+
+All configuration is centralized in `config.py` with `.env` overrides. Key variables:
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `DISCORD_TOKEN` | *(required)* | Bot token from Discord Developer Portal |
+| `LLM_PROVIDER` | `gemini` | `groq` or `gemini` (auto-detected from API keys) |
+| `GROQ_API_KEY` | — | Groq API key for primary LLM (`qwen/qwen3.8-27b`) |
+| `GEMINI_API_KEY` | — | Google Gemini API key for fallback/primary |
+| `LLM_MODEL` | provider-specific | Override model (e.g. `qwen/qwen3.8-27b`, `gemini-2.5-flash`) |
+| `EMBEDDING_MODEL` | `text-embedding-004` | Embedding model for FAISS indexing |
+| `ALLOWED_CHANNELS` | `general,ask-mentors,...` | Comma-separated channel names for ambient replies |
+| `ALLOWED_ROLES` | `hacker,hackers,participant,...` | Roles permitted to receive ambient answers |
+| `EXCLUDED_ROLES` | `admin,moderator,core member,...` | Roles that bot ignores in ambient chat |
+| `TEAM_FINDING_CHANNELS` | `find-your-team,find-your-team!` | Channels where teammate search gets `@everyone` |
+| `MEMORY_CHANNEL_NAMES` | `recur-mem-update,recur-memory,...` | Channels where dynamic memory updates work |
+| `MODERATOR_MODE` | `true` | Enable staff silence & situational awareness |
+| `PORT` | `7860` | Health check HTTP server port (Render/HF Spaces) |
+| `RENDER_EXTERNAL_URL` | — | Auto-set by Render; enables keep-alive self-ping |
+
+---
+
+## 9. Directory Structure
+
+```
+Recur/
+├── ai/                     # LLM providers, embeddings, classifier, generator
+│   ├── __init__.py
+│   ├── classifier.py       # Two-stage decision (heuristics + LLM)
+│   ├── embeddings.py       # Embedding provider factory (Gemini)
+│   ├── generator.py        # 4-step cognitive answer generator
+│   └── provider.py         # LLM provider factory (Groq/Gemini)
+├── config.py               # Centralized configuration (dataclass + .env)
+├── bot.py                  # Main entry point, Discord client, background tasks
+├── database/               # SQLite database module
+│   ├── __init__.py
+│   └── db.py               # Database class (WAL, metrics, history, memory)
+├── discord_bot/            # Discord-specific logic
+│   ├── __init__.py
+│   ├── commands.py         # Slash commands (/ask, /rules, /sync, /stats)
+│   ├── message_handler.py  # Core message pipeline (this file is large!)
+│   └── permissions.py      # Role/channel permission utilities
+├── deploy/
+│   └── hackbot.service     # systemd unit file for Linux VM deployment
+├── docker-compose.yml      # Docker Compose for containerized deployment
+├── Dockerfile              # Multi-stage build for Render/HF Spaces
+├── knowledge/              # 16 static + 2 dynamic knowledge files
+│   ├── chair.md, contacts.md, eligibility.md, faq.md, judging.md
+│   ├── links.md, live_updates.md (AUTO-UPDATED every 15 min)
+│   ├── memory_updates.md   (ORGANIZER-CONTROLLED)
+│   ├── mentors.md, prizes.md, problem-statements.md
+│   ├── rules.md, schedule.md, sponsors.md, submission.md
+│   ├── technology-rules.md, venue.md
+├── rag/                    # Retrieval-Augmented Generation pipeline
+│   ├── __init__.py
+│   ├── indexer.py          # FAISS index builder (chunks, embeddings, metadata)
+│   ├── live_sync.py        # LiveWebSync daemon (Devfolio + website scraper)
+│   ├── models.py           # Data classes for retrieval results
+│   └── retriever.py        # Hybrid retriever (dense + lexical + memory boost)
+├── render.yaml             # Render.com deployment manifest
+├── requirements.txt        # Python dependencies
+├── scripts/                # Utility scripts
+│   ├── ask.py              # CLI query tool for testing
+│   └── rebuild_index.py    # Manual FAISS rebuild
+├── storage/                # Memory & persistence abstractions
+│   ├── __init__.py
+│   ├── database.py         # SQLite operations (see database/db.py)
+│   └── memory.py           # ConversationMemory sliding window
+└── tests/                  # Pytest suite (unit + integration)
+```
+
+---
+
+## 10. Quick Start
+
+### Local Development
+```bash
+# 1. Clone & install
+git clone <repo> && cd Recur
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+
+# 2. Configure
+cp .env.example .env  # Edit with your DISCORD_TOKEN, GROQ_API_KEY, etc.
+
+# 3. Run
+python bot.py
+```
+
+### Docker (Production)
+```bash
+docker-compose up -d --build
+# Logs: docker-compose logs -f hackbot
+```
+
+### systemd (Linux VM)
+```bash
+sudo cp deploy/hackbot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now hackbot
+# Logs: journalctl -u hackbot -f
+```
+
+### Render / Hugging Face Spaces
+- Connect GitHub repo → Render creates web service from `render.yaml`
+- Or push Docker image to HF Spaces using `Dockerfile`
+- Set secrets: `DISCORD_TOKEN`, `GROQ_API_KEY`, `GEMINI_API_KEY`
+
+---
+
+## 11. Monitoring & Observability
+
+- **Structured Logging**: All layers log to stdout with `[LEVEL] module: message` format. Compatible with Loki, Datadog, Render logs.
+- **Database Metrics** (`/stats` slash command):
+  - Total queries processed
+  - Average latency (seconds)
+  - Unanswered question count
+  - Dynamic memory update count
+  - Active conversation count
+- **Health Endpoint**: `GET /` on port 7860 returns `200 OK` + "Recur Bot is running and healthy!"
+- **Discord Presence**: Bot shows `Listening to hackathon questions | #help` as status.
+
+---
+
+*Architecture document version: 2026-09-21*  
+*Last updated to reflect live sync every 15 min, 24/7 deployment configs, and heavy-demand resilience patterns.*

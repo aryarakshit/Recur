@@ -22,6 +22,7 @@ import urllib.request
 if TYPE_CHECKING:
     from rag.indexer import KnowledgeIndexer
     from rag.retriever import KnowledgeRetriever
+    from storage.database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +54,12 @@ class LiveWebSync:
         knowledge_dir: str | Path,
         indexer: KnowledgeIndexer | None = None,
         retriever: KnowledgeRetriever | None = None,
+        db: Database | None = None,
     ) -> None:
         self.knowledge_dir = Path(knowledge_dir)
         self.indexer = indexer
         self.retriever = retriever
+        self.db = db
         self.output_file = self.knowledge_dir / "live_updates.md"
         self.last_sync_time: float = 0.0
         self.cached_hash: str = ""
@@ -68,7 +71,8 @@ class LiveWebSync:
             try:
                 content = self.output_file.read_text(encoding="utf-8")
                 self.cached_live_text = content
-                self.cached_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
+                clean_initial = re.sub(r"\*Last Live Synced:[^\n]*\*", "", content).strip()
+                self.cached_hash = hashlib.md5(clean_initial.encode("utf-8")).hexdigest()
             except Exception as e:
                 logger.debug("Could not read initial live_updates.md: %s", e)
 

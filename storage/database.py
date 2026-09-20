@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -23,11 +24,15 @@ class Database:
     def __init__(self, db_path: Path | str) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()
         self._init_db()
 
     def _get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode = WAL;")
+        conn.execute("PRAGMA synchronous = NORMAL;")
+        conn.execute("PRAGMA busy_timeout = 30000;")
         return conn
 
     def _init_db(self) -> None:
@@ -109,7 +114,7 @@ class Database:
         """Logs a participant query that could not be answered from the knowledge base."""
         ts = timestamp if timestamp is not None else time.time()
         sources_json = json.dumps(retrieved_sources or [])
-        with self._get_connection() as conn:
+        with self._lock, self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
@@ -157,7 +162,7 @@ class Database:
         ts = time.time()
         cid = str(channel_id)
         uid = str(user_id)
-        with self._get_connection() as conn:
+        with self._lock, self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
@@ -206,7 +211,7 @@ class Database:
 
     def clear_conversation_cache(self, channel_id: str | int | None = None) -> int:
         """Clears conversation history (for /clearcache command)."""
-        with self._get_connection() as conn:
+        with self._lock, self._get_connection() as conn:
             cursor = conn.cursor()
             if channel_id is not None:
                 cursor.execute("DELETE FROM conversation_history WHERE channel_id = ?", (str(channel_id),))
@@ -220,7 +225,7 @@ class Database:
     def set_metric(self, key: str, value: Any) -> None:
         val_str = json.dumps(value)
         ts = time.time()
-        with self._get_connection() as conn:
+        with self._lock, self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
@@ -254,7 +259,7 @@ class Database:
     ) -> int:
         """Logs a dynamic memory update provided by organizers."""
         ts = timestamp if timestamp is not None else time.time()
-        with self._get_connection() as conn:
+        with self._lock, self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
@@ -297,7 +302,7 @@ class Database:
     def delete_memory_update(self, target_text: str) -> int:
         """Deletes dynamic memory updates matching a target keyword or phrase."""
         pattern = f"%{target_text.strip()}%"
-        with self._get_connection() as conn:
+        with self._lock, self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM memory_updates WHERE content LIKE ?", (pattern,))
             deleted = cursor.rowcount
@@ -317,7 +322,7 @@ class Database:
     ) -> int:
         """Logs query execution details (latency, token usage, fallback status)."""
         ts = timestamp if timestamp is not None else time.time()
-        with self._get_connection() as conn:
+        with self._lock, self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
