@@ -9,7 +9,7 @@ import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from ai.classifier import MessageClassifier
 from ai.embeddings import get_embedding_provider
@@ -205,6 +205,36 @@ def main() -> None:
         )
         await bot.change_presence(activity=activity)
         logger.info("Bot is ready and listening for hackathon queries!")
+
+        # Catch up on any unanswered messages while bot was offline / restarting
+        try:
+            logger.info("Scanning for any unanswered messages in allowed channels...")
+            caught_up = await message_handler.catch_up_unanswered_messages(
+                bot_user=bot.user,
+                guilds=bot.guilds,
+                limit_per_channel=25,
+            )
+            logger.info("Catch-up completed: %d unanswered message(s) processed.", caught_up)
+        except Exception as e:
+            logger.error("Error during startup catch-up: %s", e)
+
+        # Start periodic catch-up task to prevent unanswered queries
+        if not periodic_catch_up.is_running():
+            periodic_catch_up.start()
+
+    @tasks.loop(minutes=5)
+    async def periodic_catch_up() -> None:
+        """Periodic background task to catch up on any missed or unanswered messages."""
+        try:
+            count = await message_handler.catch_up_unanswered_messages(
+                bot_user=bot.user,
+                guilds=bot.guilds,
+                limit_per_channel=15,
+            )
+            if count > 0:
+                logger.info("Periodic catch-up: processed %d unanswered message(s).", count)
+        except Exception as e:
+            logger.debug("Error in periodic catch-up task: %s", e)
 
     @bot.event
     async def on_resumed() -> None:

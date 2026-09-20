@@ -563,3 +563,121 @@ class MessageHandler:
                 user_id=message.author.id,
                 message=answer,
             )
+
+    async def catch_up_unanswered_messages(
+        self,
+        bot_user: discord.ClientUser,
+        guilds: list[discord.Guild],
+        limit_per_channel: int = 20,
+    ) -> int:
+        """Scans recent channel history in allowed channels and handles any unanswered participant queries or teammate requests.
+
+        Returns:
+            Number of unanswered messages processed.
+        """
+        processed_count = 0
+        for guild in guilds:
+            # 1. Identify allowed and team finding channels
+            channels_to_check: list[discord.TextChannel] = []
+            for ch in getattr(guild, "text_channels", []):
+                if self._is_team_finding_channel(ch) or self._is_channel_allowed(ch):
+                    channels_to_check.append(ch)
+
+            # 2. Gather forwarded original message IDs in team finding channel to avoid duplicate forwards
+            forwarded_msg_ids: set[int] = set()
+            team_channel = self._get_team_finding_channel(guild)
+            if team_channel:
+                try:
+                    async for tm in team_channel.history(limit=50):
+                        if tm.author.id == bot_user.id:
+                            urls = re.findall(r"https://discord\.com/channels/\d+/\d+/(\d+)", tm.content)
+                            for u in urls:
+                                forwarded_msg_ids.add(int(u))
+                except Exception as e:
+                    logger.debug("Could not read team channel history: %s", e)
+
+            # 3. Check each channel
+            for ch in channels_to_check:
+                try:
+                    recent_messages: list[discord.Message] = [m async for m in ch.history(limit=limit_per_channel)]
+                except Exception as e:
+                    logger.warning("Could not fetch history for #%s: %s", getattr(ch, "name", "channel"), e)
+                    continue
+
+                if not recent_messages:
+                    continue
+
+                # Collect all message IDs that received a reply from the bot
+                replied_to_by_bot: set[int] = set()
+                for m in recent_messages:
+                    if m.author.id == bot_user.id and m.reference and m.reference.message_id:
+                        replied_to_by_bot.add(m.reference.message_id)
+
+                # Iterate in chronological order (oldest first)
+                for msg in reversed(recent_messages):
+                    # Ignore bots, Dyno, self
+                    if getattr(msg.author, "bot", False) or msg.author.id == bot_user.id:
+                        continue
+                    if "dyno" in getattr(msg.author, "name", "").lower():
+                        continue
+
+                    # If bot already replied directly to this message, skip
+                    if msg.id in replied_to_by_bot:
+                        continue
+
+                    cleaned = self._clean_content(msg, bot_user)
+                    if not cleaned or self.classifier.is_chatter(cleaned):
+                        continue
+
+                    # If message is in team finding channel
+                    if self._is_team_finding_channel(ch):
+                        if self.classifier.is_teammate_search(cleaned):
+                            handled = await self._handle_team_finding_message(msg, bot_user)
+                            if handled:
+                                replied_to_by_bot.add(msg.id)
+                                processed_count += 1
+                        continue
+
+                    # If message in allowed channel (#general, #ask-mentors) is a teammate request
+                    if self.classifier.is_teammate_search(cleaned):
+                        if msg.id in forwarded_msg_ids:
+                            continue
+
+                        # Check author is not staff
+                        is_staff = False
+                        if hasattr(msg.author, "roles"):
+                            r_names = [r.name.lower() for r in msg.author.roles]
+                            perms = getattr(msg.author, "guild_permissions", None)
+                            is_staff = bool(perms and getattr(perms, "administrator", False)) or any(
+                                "admin" in r or "administrator" in r or "moderator" in r or "mod" in r for r in r_names
+                            ) or any(
+                                ex in r for ex in self.config.excluded_role_names for r in r_names
+                            )
+
+                        if not is_staff:
+                            await self._forward_team_finding_message(msg, cleaned)
+                            forwarded_msg_ids.add(msg.id)
+                            replied_to_by_bot.add(msg.id)
+                            processed_count += 1
+                        continue
+
+                    # Ambient hackathon question: check if anyone replied to this message
+                    has_reply = any(
+                        m.reference and m.reference.message_id == msg.id
+                        for m in recent_messages
+                    )
+                    if has_reply:
+                        continue
+
+                    # Process through normal handle_message pipeline
+                    should_reply, _ = await self.classifier.should_reply(
+                        content=cleaned,
+                        is_bot_mentioned=bot_user in msg.mentions,
+                        is_reply_to_bot=False,
+                    )
+                    if should_reply:
+                        await self.handle_message(msg, bot_user)
+                        replied_to_by_bot.add(msg.id)
+                        processed_count += 1
+
+        return processed_count

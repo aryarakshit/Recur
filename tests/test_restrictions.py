@@ -540,5 +540,79 @@ async def test_replies_fallback_when_directly_mentioned():
     assert "couldn't find" in msg.reply.call_args[0][0].lower()
 
 
+@pytest.mark.asyncio
+async def test_catch_up_unanswered_messages():
+    from unittest.mock import AsyncMock
+    from ai.classifier import MessageClassifier
+    from ai.provider import MockProvider
+
+    cfg = Config()
+    classifier = MessageClassifier(MockProvider())
+    handler = MessageHandler(
+        classifier=classifier,
+        generator=MagicMock(),
+        retriever=MagicMock(),
+        memory=MagicMock(),
+        database=MagicMock(),
+        config=cfg,
+    )
+
+    bot_user = MagicMock()
+    bot_user.id = 999999
+
+    ch_general = MagicMock()
+    ch_general.name = "general"
+    ch_general.mention = "<#1111>"
+    ch_general.parent = None
+
+    ch_team = MagicMock()
+    ch_team.name = "find-your-team!"
+    ch_team.mention = "<#2222>"
+    ch_team.send = AsyncMock()
+
+    guild = MagicMock()
+    guild.name = "Recursive Hackathon"
+    guild.text_channels = [ch_general, ch_team]
+    ch_general.guild = guild
+
+    # Message 1: Aniruddh's unanswered "I am finding teamates"
+    author = MagicMock()
+    author.name = "Aniruddh"
+    author.id = 88888
+    author.bot = False
+    author.mention = "<@88888>"
+    author.roles = [MagicMock(name="@everyone")]
+    author.guild_permissions.administrator = False
+
+    msg1 = MagicMock()
+    msg1.id = 1001
+    msg1.channel = ch_general
+    msg1.guild = guild
+    msg1.author = author
+    msg1.content = "I am finding teamates"
+    msg1.mentions = []
+    msg1.reference = None
+    msg1.jump_url = "https://discord.com/channels/1/2/1001"
+    msg1.reply = AsyncMock()
+
+    async def async_iter_gen(limit=20):
+        yield msg1
+
+    ch_general.history = MagicMock(return_value=async_iter_gen())
+
+    async def async_iter_team(limit=50):
+        if False:
+            yield None
+
+    ch_team.history = MagicMock(return_value=async_iter_team())
+
+    count = await handler.catch_up_unanswered_messages(bot_user, [guild], limit_per_channel=20)
+    assert count == 1
+    ch_team.send.assert_called_once()
+    assert "@everyone" in ch_team.send.call_args[0][0]
+    msg1.reply.assert_called_once()
+
+
+
 
 
