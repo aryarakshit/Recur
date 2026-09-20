@@ -273,20 +273,36 @@ class GroqProvider(LLMProvider):
             user_content += f"Recent Conversation History:\n{history}\n\n"
         user_content += f"Participant Question:\n{question}"
 
-        try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": user_content},
-                ],
-                temperature=0.2,
-                max_tokens=1200,
-            )
-            return (response.choices[0].message.content or "").strip()
-        except Exception as e:
-            logger.error("Groq answer generation error: %s", e)
-            return "AI service is temporarily unavailable. Please contact a maintainer."
+        # Attempt primary model (max_tokens=700 stays safely below Groq free tier 1000 OTPM limit)
+        models_to_try = [self.model]
+        if "gpt-oss-20b" not in self.model:
+            models_to_try.append("openai/gpt-oss-20b")
+
+        for model_name in models_to_try:
+            try:
+                response = await self.client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": system_instruction},
+                        {"role": "user", "content": user_content},
+                    ],
+                    temperature=0.2,
+                    max_tokens=700,
+                )
+                content = (response.choices[0].message.content or "").strip()
+                if content:
+                    return content
+            except Exception as e:
+                logger.warning("Groq model '%s' error: %s. Trying backup if available.", model_name, e)
+
+        # Grounded fallback directly from context if LLM API rate limits
+        lines = [line.strip() for line in context.splitlines() if line.strip() and not line.startswith("[Source") and not line.startswith("Document:")]
+        if lines:
+            first_chunk = "\n".join(lines[:8])
+            return f"{first_chunk}\n\n*For more details, check official announcements in {organizer_channel} or ask {organizer_tag}.*"
+
+        return f"I couldn't process this right now. Please check {organizer_channel} or ask {organizer_tag}!"
+
 
 
 class MockProvider(LLMProvider):
