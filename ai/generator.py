@@ -57,6 +57,20 @@ def clean_cognitive_response(raw_text: str, question: str = "") -> tuple[str, st
     # 3. Strip unwanted trailing source footnotes (e.g. "\n\nSource: ...")
     cleaned = re.sub(r"\n+(?:\*\*|__)?Sources?(?:\*\*|__)?\s*:.*$", "", cleaned, flags=re.IGNORECASE | re.DOTALL).strip()
 
+    # 4. Filter repetitive greetings ("Hey there!", "Hi there! 👋") unless user explicitly greeted first
+    if question:
+        user_greeted = any(
+            re.search(rf"\b{g}\b", question.lower())
+            for g in ["hi", "hello", "hey", "sup", "greetings", "good morning", "good evening", "namaste"]
+        )
+        if not user_greeted:
+            cleaned = re.sub(
+                r"^(?:(?:hi|hey|hello)(?:\s+there|\s+team|\s+everyone|\s+folks)?\s*[!,\.]*\s*(?:[\U00010000-\U0010ffff\u2600-\u26ff\u2700-\u27bf])*\s*\n*)+",
+                "",
+                cleaned,
+                flags=re.IGNORECASE,
+            ).strip()
+
     if reasoning and question:
         logger.info("Cognitive Deliberation for '%s':\n%s", question[:60], reasoning)
 

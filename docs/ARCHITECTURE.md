@@ -74,12 +74,12 @@ flowchart TD
 ## 2. Core Architectural Layers
 
 ### Layer 1: Discord Ingestion & Gateway Layer
-- **`bot.py`**: Initializes `commands.Bot` with privileged `intents.message_content = True` and `intents.members = True`.
+- **`bot.py`**: Initializes `commands.Bot` with `intents.message_content = True`. Privileged gateway `intents.members` is intentionally set to `False` to prevent `PrivilegedIntentsRequired` gateway connection crashes when Server Members Intent is not toggled in developer portal.
 - **Health Check & Keep-Alive**: Runs an internal multi-threaded HTTP server (`0.0.0.0:7860`) returning `200 OK` for continuous uptime on Render and a 9-minute self-ping loop preventing container sleep.
 - **Background Scanner**: Uses `discord.ext.tasks.loop(minutes=5)` to scan `#general` and `#ask-mentors` for unanswered questions or missed teammate searches.
 
 ### Layer 2: Role, Permission & Peer Filtering Layer
-- **`_resolve_member()`**: Resolves raw `discord.User` instances from history into full `discord.Member` objects via guild cache or Discord HTTP API, backed by a 300-second in-memory TTL cache.
+- **`_resolve_member()`**: Resolves raw `discord.User` instances from history into full `discord.Member` objects via guild cache or Discord HTTP REST API (`guild.fetch_member()`), backed by a 300-second in-memory TTL cache. This bypasses the need for privileged gateway intents entirely.
 - **Server Role Hierarchy Check**: Strictly isolates staff members from participants based on role colors and privileges:
   - 🔴 **Admin** (`Admin` role / Administrator permissions)
   - 🟣 **Moderator** (`Moderator` role)
@@ -99,11 +99,18 @@ flowchart TD
 - **`LiveWebSync` (Periodic Scraper)**: Scrapes `https://recursiveacm.devfolio.co/` and `https://recursiveacm.in` every 15 minutes, automatically updating `knowledge/live_updates.md` and triggering incremental FAISS re-indexing.
 
 ### Layer 5: 4-Step Cognitive Architecture
-- **`[READ]`**: Ingests the query, recent conversation history, retrieved knowledge base chunks, and live Devfolio updates with attention to emotional tone.
-- **`[UNDERSTAND]`**: Identifies participant anxiety (e.g. deadline panic, submission cutoff confusion, PPT slide limits, working prototype vs idea phase).
-- **`[THINK & DELIBERATE]`**: Synthesizes official judging criteria (*Innovation 25%, Technical Complexity 25%, Working Prototype 25%, UI/UX 15%, Pitch 10%*), Devfolio submission buffers, and pragmatic mentor advice.
-- **`[REPLY]`**: Formulates an empathetic, encouraging, high-IQ Discord reply.
-- **`clean_cognitive_response()`**: Isolates and logs the internal reasoning loop to server logs while serving clean, presentation-ready markdown to Discord.
+- **Active Production Models**:
+  - **Primary Engine**: `qwen/qwen3.8-27b` (Qwen 27B on Groq LPU with ~2s sub-second inference).
+  - **Automated Failover Engine**: `openai/gpt-oss-20b` (instant backup if primary encounters rate limit).
+  - **Token Calibration**: `max_tokens = 700` (calibrated strictly below Groq's 1000 OTPM ceiling to prevent HTTP 429 rate limit rejections).
+- **Reasoning Steps**:
+  - **`[READ]`**: Ingests the query, recent conversation history, retrieved knowledge base chunks, and live Devfolio updates with attention to emotional tone.
+  - **`[UNDERSTAND]`**: Identifies participant anxiety (e.g. deadline panic, submission cutoff confusion, PPT slide limits, working prototype vs idea phase).
+  - **`[THINK & DELIBERATE]`**: Synthesizes official judging criteria (*Innovation 25%, Technical Complexity 25%, Working Prototype 25%, UI/UX 15%, Pitch 10%*), Devfolio submission buffers, and pragmatic mentor advice.
+  - **`[REPLY]`**: Formulates an empathetic, encouraging, high-IQ Discord reply.
+- **`clean_cognitive_response()` & Tone Filter**:
+  - Extracts and logs internal reasoning process to server logs while serving clean presentation markdown to Discord.
+  - **Greeting Moderation**: Automatically strips boilerplate `"Hi there!"` / `"Hey there! 👋"` when the participant asked a direct question without greeting, diving straight into the core answer. Greetings are only preserved if the participant explicitly greeted first.
 
 ### Layer 6: Action & Persistence Layer
 - **`Database` (SQLite)**: Logs queries, latency, token usage, unanswered questions, and system metrics.

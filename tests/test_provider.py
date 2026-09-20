@@ -120,3 +120,22 @@ Sources: rules.md"""
     assert "<thinking>" not in answer
     assert "Sources:" not in answer
 
+
+def test_clean_cognitive_response_strips_unnecessary_greeting():
+    from ai.generator import clean_cognitive_response
+
+    raw = """[REPLY]
+Hey there! 👋
+
+For RECURSIVE — Shift-8 Hackathon 2026, we are running an Open Theme competition."""
+
+    # Direct query without greeting -> Greeting stripped
+    ans, _ = clean_cognitive_response(raw, question="Can you share problem statements with me")
+    assert ans == "For RECURSIVE — Shift-8 Hackathon 2026, we are running an Open Theme competition."
+    assert "Hey there" not in ans
+
+    # Query with greeting -> Greeting preserved
+    ans2, _ = clean_cognitive_response(raw, question="Hi! Can you share problem statements with me")
+    assert ans2.startswith("Hey there! 👋")
+
+
