@@ -68,8 +68,8 @@ def test_extract_memory_update_explicit_commands(memory_handler):
     payload4 = memory_handler._extract_memory_update(text4, is_memory_channel=False)
     assert payload4 == "Hardware kits must be returned before 3 PM."
 
-    # 5. "please save this info to knowledge base: Submissions close at 12:00."
-    text5 = "please save this info to knowledge base: Submissions close at 12:00."
+    # 5. "@recur add this info in your memory .. Submissions close at 12:00."
+    text5 = "@recur add this info in your memory .. Submissions close at 12:00."
     payload5 = memory_handler._extract_memory_update(text5, is_memory_channel=False)
     assert payload5 == "Submissions close at 12:00."
 
@@ -80,20 +80,25 @@ def test_extract_memory_update_explicit_commands(memory_handler):
 
 def test_extract_memory_update_in_memory_channel(memory_handler):
     # Inside #recur-mem-update:
-    # Declarative announcements are automatically treated as memory updates
+    # Casual chat like "heloow recur" MUST NOT trigger a memory update
+    assert memory_handler._extract_memory_update("heloow recur", is_memory_channel=True) is None
+    assert memory_handler._extract_memory_update("hello", is_memory_channel=True) is None
+    assert memory_handler._extract_memory_update("how are you doing", is_memory_channel=True) is None
+
+    # Normal announcements without explicit trigger MUST NOT trigger a memory update
     announcement = "The Wi-Fi network is RecurGuest and password is hackathon2026."
-    payload = memory_handler._extract_memory_update(announcement, is_memory_channel=True)
-    assert payload == "The Wi-Fi network is RecurGuest and password is hackathon2026."
+    assert memory_handler._extract_memory_update(announcement, is_memory_channel=True) is None
 
-    # Questions inside #recur-mem-update should NOT be treated as memory updates (so they can be answered)
-    q1 = "What is the Wi-Fi password?"
-    assert memory_handler._extract_memory_update(q1, is_memory_channel=True) is None
+    # Questions inside #recur-mem-update MUST NOT trigger a memory update (so they can be answered via Q&A)
+    assert memory_handler._extract_memory_update("What is the Wi-Fi password?", is_memory_channel=True) is None
+    assert memory_handler._extract_memory_update("Can solo participants submit a project?", is_memory_channel=True) is None
+    assert memory_handler._extract_memory_update("When do project submissions close?", is_memory_channel=True) is None
 
-    q2 = "Can solo participants submit a project?"
-    assert memory_handler._extract_memory_update(q2, is_memory_channel=True) is None
-
-    q3 = "When do project submissions close?"
-    assert memory_handler._extract_memory_update(q3, is_memory_channel=True) is None
+    # ONLY explicit triggers update memory:
+    assert memory_handler._extract_memory_update("@recur add this info in your memory .. Wi-Fi password is recur", is_memory_channel=True) == "Wi-Fi password is recur"
+    assert memory_handler._extract_memory_update("add to memory: Check-in starts at 9 AM", is_memory_channel=True) == "Check-in starts at 9 AM"
+    assert memory_handler._extract_memory_update("auto update memory: Judging at 2 PM", is_memory_channel=True) == "Judging at 2 PM"
+    assert memory_handler._extract_memory_update("remember this: Badges required for lunch", is_memory_channel=True) == "Badges required for lunch"
 
 
 @pytest.mark.asyncio
@@ -231,6 +236,54 @@ async def test_handle_message_qa_in_memory_channel(memory_handler):
     # Bot should answer via generator!
     memory_handler.generator.generate_answer.assert_called_once()
     msg.reply.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_heloow_recur_treated_as_normal_chat_not_memory_update(memory_handler, temp_env):
+    """Verifies that 'heloow recur' in #recur-mem-update does NOT trigger a memory update."""
+    _, db, _ = temp_env
+
+    bot_user = MagicMock()
+    bot_user.id = 999999
+    bot_user.name = "Recur"
+    bot_user.bot = True
+
+    channel = MagicMock()
+    channel.id = 888888
+    channel.name = "recur-mem-update"
+    channel.parent = None
+
+    admin_user = MagicMock()
+    admin_user.id = 101010
+    admin_user.name = "aryarakshit"
+    admin_user.display_name = "aryarakshit"
+    admin_user.bot = False
+    admin_role = MagicMock()
+    admin_role.name = "Admin"
+    admin_user.roles = [admin_role]
+
+    msg = MagicMock()
+    msg.id = 777333
+    msg.author = admin_user
+    msg.channel = channel
+    msg.guild = MagicMock()
+    msg.guild.me = MagicMock()
+    msg.guild.me.roles = []
+    msg.mentions = []
+    msg.reference = None
+    msg.content = "heloow recur"
+    msg.reply = AsyncMock()
+
+    await memory_handler.handle_message(msg, bot_user)
+
+    # 1. Verify NO memory update was logged in database
+    records = db.get_memory_updates()
+    assert len(records) == 0, "No memory updates should be recorded for 'heloow recur'"
+
+    # 2. Verify bot replied as normal chat (via generator), NOT "Memory Updated Successfully"
+    msg.reply.assert_called_once()
+    reply_text = msg.reply.call_args[0][0]
+    assert "Memory Updated Successfully" not in reply_text
 
 
 @pytest.mark.asyncio

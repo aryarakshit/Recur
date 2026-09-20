@@ -110,6 +110,14 @@ class AnswerGenerator:
         if re.search(r"\b(who\s+are\s+you|what\s+are\s+you|who\s+is\s+recur|what\s+is\s+recur|tell\s+me\s+about\s+yourself)\b", clean_q):
             return IDENTITY_REPLY, False
 
+        # Check friendly greetings (e.g. "heloow recur", "hello recur", "hi recur", "hey recur", "gm", "good morning")
+        if re.search(r"^(?:hi|hello|helo|helow|heloow|hey|sup|greetings|gm|good\s+(?:morning|afternoon|evening))\s*(?:recur|bot)?\s*[!.]*$", clean_q):
+            return "Hello! I am Recur, the official AI assistant for RECURSIVE 2026. How can I help you with the hackathon today?", False
+
+        # Check conversational check-ins (e.g. "how are you", "how are you doing", "what's up")
+        if re.search(r"\b(?:how\s+are\s+you|how's\s+it\s+going|how\s+are\s+you\s+doing|what's\s+up|wassup)\b", clean_q):
+            return "I'm doing well, thank you! Ready to assist you with any questions or guidelines for RECURSIVE 2026. What would you like to know?", False
+
         # Check if query is asking about deadlines, extensions, PPT submissions, or live updates
         is_time_or_deadline_query = any(
             w in clean_q for w in [

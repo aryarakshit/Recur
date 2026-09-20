@@ -394,7 +394,14 @@ class MessageHandler:
 
     def _extract_memory_update(self, text: str, is_memory_channel: bool = False) -> str | None:
         """Detects if the message is requesting to add/update information in memory.
-        Returns the cleaned information string to remember, or None if it's a general question/chatter.
+
+        ONLY triggers on:
+        1. @recur add this info in your memory .. <info>
+        2. add to memory: <info>
+        3. auto update memory: <info>
+        4. remember this: <info>
+
+        Otherwise returns None (normal chat).
         """
         clean = text.strip()
         if not clean:
@@ -403,12 +410,16 @@ class MessageHandler:
         def _clean_payload(info_candidate: str) -> str:
             return re.sub(r"^[\s.\-–—:]+", "", info_candidate).strip()
 
-        # Check explicit memory update prefixes and commands
+        # Explicit trigger patterns:
+        # 1. "@recur add this info in your memory .. <info>" (or without @recur, or with "to")
+        # 2. "add to memory: <info>" (or "add to memory .. <info>")
+        # 3. "auto update memory: <info>" (or "auto update memory .. <info>", or "update memory: <info>")
+        # 4. "remember this: <info>" (or "remember this .. <info>")
         patterns = [
-            r"^(?:please\s+)?(?:add|save|store|write|record|put)\s+(?:this\s+)?(?:info|information|update|note)?\s*(?:in|to|into)\s*(?:your\s+)?(?:memory|knowledge\s*base|kb)\s*[:\-–—.]*\s*(.+)$",
-            r"^(?:please\s+)?(?:auto\s+)?(?:update|refresh)\s+(?:your\s+)?(?:memory|knowledge\s*base|kb)\s*(?:with)?\s*[:\-–—.]*\s*(.+)$",
-            r"^(?:please\s+)?remember\s+(?:this|that|the\s+following)?\s*[:\-–—.]*\s*(.+)$",
-            r"^(?:new\s+info|new\s+update|memory\s+update|kb\s+update|note)\s*[:\-–—.]*\s*(.+)$",
+            r"^(?:@?recur\s+)?(?:please\s+)?add\s+(?:this\s+)?(?:info|information)?\s*(?:in|to|into)\s*(?:your\s+)?memory\s*[:\-–—.]*\s*(.+)$",
+            r"^(?:@?recur\s+)?(?:please\s+)?add\s+to\s+memory\s*[:\-–—.]*\s*(.+)$",
+            r"^(?:@?recur\s+)?(?:please\s+)?(?:auto\s+)?update\s+memory\s*[:\-–—.]*\s*(.+)$",
+            r"^(?:@?recur\s+)?(?:please\s+)?remember\s+this\s*[:\-–—.]*\s*(.+)$",
         ]
 
         for pat in patterns:
@@ -418,8 +429,9 @@ class MessageHandler:
                 if len(info) >= 3:
                     return info
 
+        # In-line trigger search (e.g. if user pinged bot in the middle or formatted text):
         trigger_match = re.search(
-            r"(?:add\s+(?:this\s+)?(?:info\s+)?(?:in|to)\s+(?:your\s+)?memory|add\s+to\s+memory|(?:auto\s+)?update\s+memory|remember\s+this|remember\s+that)\s*[:\-–—.]*\s*(.+)$",
+            r"(?:add\s+(?:this\s+)?(?:info\s+)?(?:in|to)\s+(?:your\s+)?memory|add\s+to\s+memory|(?:auto\s+)?update\s+memory|remember\s+this)\s*[:\-–—.]*\s*(.+)$",
             clean,
             re.IGNORECASE | re.DOTALL,
         )
@@ -428,16 +440,7 @@ class MessageHandler:
             if len(info) >= 3:
                 return info
 
-        # In dedicated #recur-mem-update channel, also treat declarative announcements/updates as memory updates
-        if is_memory_channel:
-            clean_lower = clean.lower()
-            # If it's a question, return None so it gets answered via Q&A pipeline
-            is_question = "?" in clean or any(clean_lower.startswith(w) for w in [
-                "what", "when", "where", "who", "how", "why", "can", "could", "is", "are", "tell me", "show me"
-            ])
-            if not is_question and len(clean) >= 8:
-                return clean
-
+        # Otherwise normal chat!
         return None
 
     async def _handle_memory_update(
