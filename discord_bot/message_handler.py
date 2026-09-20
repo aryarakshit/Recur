@@ -893,6 +893,7 @@ class MessageHandler:
         organizer_tag_str = " or ".join(tags)
 
         # 3. Retrieve knowledge and generate answer
+        start_time = time.time()
         async with SafeTyping(message.channel):
             retrieval_results = self.retriever.retrieve(query=cleaned_text, top_k=4)
 
@@ -903,6 +904,17 @@ class MessageHandler:
                 organizer_channel=organizer_channel_str,
                 organizer_tag=organizer_tag_str,
             )
+            latency = time.time() - start_time
+            try:
+                self.db.log_query(
+                    question=cleaned_text,
+                    channel_id=message.channel.id,
+                    user_id=message.author.id,
+                    latency=latency,
+                    was_fallback=was_fallback,
+                )
+            except Exception as e:
+                logger.debug("Could not log query execution: %s", e)
 
             # If answer is fallback, log question for organizers
             if was_fallback:

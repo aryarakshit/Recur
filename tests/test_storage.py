@@ -57,3 +57,30 @@ def test_clear_conversation_cache(db):
     cleared = db.clear_conversation_cache(channel_id=1)
     assert cleared == 2
     assert len(db.get_conversation_history(1, 10)) == 0
+
+
+def test_log_query_and_get_stats(db):
+    row_id = db.log_query(
+        question="What is the team limit?",
+        channel_id=100,
+        user_id=200,
+        latency=1.25,
+        token_usage=150,
+        was_fallback=False,
+    )
+    assert row_id > 0
+
+    db.log_query(
+        question="When does hacking start?",
+        channel_id=100,
+        user_id=201,
+        latency=0.75,
+        token_usage=120,
+        was_fallback=False,
+    )
+
+    stats = db.get_query_stats()
+    assert stats["total_queries"] == 2
+    assert stats["avg_latency"] == 1.0
+    assert stats["unanswered_count"] == 0
+    assert stats["memory_updates_count"] == 0

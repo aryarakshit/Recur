@@ -82,6 +82,20 @@ class Database:
                     timestamp REAL NOT NULL
                 )
             """)
+
+            # 5. Query execution & operational metrics table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS query_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    question TEXT NOT NULL,
+                    channel_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    latency REAL NOT NULL,
+                    token_usage INTEGER DEFAULT 0,
+                    was_fallback INTEGER DEFAULT 0,
+                    timestamp REAL NOT NULL
+                )
+            """)
             conn.commit()
 
     def log_unanswered_question(
@@ -279,3 +293,53 @@ class Database:
                 }
                 for row in rows
             ]
+
+    def log_query(
+        self,
+        question: str,
+        channel_id: str | int,
+        user_id: str | int,
+        latency: float,
+        token_usage: int = 0,
+        was_fallback: bool = False,
+        timestamp: float | None = None,
+    ) -> int:
+        """Logs query execution details (latency, token usage, fallback status)."""
+        ts = timestamp if timestamp is not None else time.time()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO query_logs (question, channel_id, user_id, latency, token_usage, was_fallback, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (question.strip(), str(channel_id), str(user_id), float(latency), int(token_usage), int(was_fallback), ts),
+            )
+            conn.commit()
+            return cursor.lastrowid or 0
+
+    def get_query_stats(self) -> dict[str, Any]:
+        """Retrieves aggregated operational metrics for the /stats slash command."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*), AVG(latency) FROM query_logs")
+            row = cursor.fetchone()
+            total_queries = row[0] if row and row[0] is not None else 0
+            avg_latency = row[1] if row and row[1] is not None else 0.0
+
+            cursor.execute("SELECT COUNT(*) FROM unanswered_questions WHERE resolved = 0")
+            unanswered_count = cursor.fetchone()[0] or 0
+
+            cursor.execute("SELECT COUNT(*) FROM memory_updates")
+            memory_updates_count = cursor.fetchone()[0] or 0
+
+            cursor.execute("SELECT COUNT(DISTINCT channel_id || '_' || user_id) FROM conversation_history")
+            active_conversations = cursor.fetchone()[0] or 0
+
+            return {
+                "total_queries": total_queries,
+                "avg_latency": round(float(avg_latency), 3),
+                "unanswered_count": unanswered_count,
+                "memory_updates_count": memory_updates_count,
+                "active_conversations": active_conversations,
+            }
