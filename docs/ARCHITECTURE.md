@@ -118,13 +118,20 @@ flowchart TD
   - **Lexical Keyword Overlap**: Content keyword matching with English stop-word filtering prevents generic documents (like `chair.md`) from dominating short queries.
   - **Dynamic Organizer Memory Priority**: All entries in `knowledge/memory_updates.md` are evaluated across a 25-candidate window and given an organizer priority boost (`+0.35`) when query keywords match live organizer directives.
 - **`LiveWebSync` (Periodic Scraper)**: Scrapes `https://recursiveacm.devfolio.co/` and `https://recursiveacm.in` every 15 minutes, automatically updating `knowledge/live_updates.md` and triggering incremental FAISS re-indexing.
-- **Dynamic Memory Ingestion (`#recur-mem-update`)**:
-  - Strictly listens to the 4 explicit triggers:
+- **Dynamic Memory Ingestion & Removal (`#recur-mem-update`)**:
+  - **Memory Ingestion Triggers**:
     1. `@recur add this info in your memory .. <info>`
     2. `add to memory: <info>`
     3. `auto update memory: <info>`
     4. `remember this: <info>`
-  - Automatically commits to `memory_updates.md`, records in SQLite database, rebuilds FAISS vectors in `< 0.1s`, and hot-reloads the retriever with zero downtime.
+  - **Memory Removal Triggers**:
+    1. `@recur remove this info from your memory .. <target>`
+    2. `remove from memory: <target>`
+    3. `remove from mem: <target>`
+    4. `remove mem: <target>`
+    5. `delete from memory: <target>`
+    6. `forget this: <target>`
+  - Automatically writes or purges entries from `memory_updates.md`, updates the SQLite database, rebuilds FAISS vectors in `< 0.1s`, and hot-reloads the retriever with zero downtime.
   - All other messages are handled as normal conversation.
 
 ### Layer 5: 4-Step Cognitive Architecture
@@ -157,7 +164,7 @@ flowchart TD
 | **Team Recruitment** | **In-Channel Team Search Response** | Hacker posts skill set and recruitment request inside `#find-your-team!`. | 🟢 `Hacker` / New Member | Replies in `#find-your-team!` tagging `@everyone` to maximize peer visibility. | Ignores casual greetings and non-recruitment chat in the channel. |
 | **Background Loop** | **Unanswered Message Catch-Up with Situational Awareness** | A participant's question or teammate search was missed or left without reply (on bot boot or every 5 mins). | 🟢 `Hacker` | Scans recent channel history, answers genuinely unanswered queries, and forwards missed teammate searches. | **Situational Check**: Stays silent if a mentor/staff answered in subsequent messages, if someone tagged the author, if author self-resolved, or if Discord reply was used. Never talks over human mentors. |
 | **Live Web Sync** | **Real-Time Deadline & Schedule Updates** | Organizer updates Devfolio schedule or website (e.g. PPT deadline extension). | Everyone | Scrapes site every 15 minutes, indexes changes into FAISS, and answers participants with live dates. | Falls back to cached data if Devfolio or website is temporarily unreachable. |
-| **Dynamic Memory** | **Live Organizer Memory Ingestion & Re-Index** | Organizer posts one of 4 strict triggers in `#recur-mem-update`:<br>1. `@recur add this info in your memory .. <info>`<br>2. `add to memory: <info>`<br>3. `auto update memory: <info>`<br>4. `remember this: <info>`<br>*(All other messages are treated as normal chat)*. | Anyone in `#recur-mem-update` (including 🔴 `Admin`, 🔵 `Core Member`, 🩷 `Volunteer`) | **Auto Updates Memory**: Appends note to `knowledge/memory_updates.md`, logs to SQLite, rebuilds FAISS vectors in `< 0.1s`, hot-reloads retriever, and confirms via rich card. Directives receive authoritative priority (`+0.35` boost) across all channels. | Strict prefix validation prevents casual banter or greetings from polluting knowledge base. Hot-reload has zero downtime. |
+| **Dynamic Memory** | **Live Organizer Memory Ingestion & Removal** | Organizer posts dynamic addition or removal trigger in `#recur-mem-update`:<br>• **Add**: `@recur add this info in your memory ..`, `add to memory:`, `auto update memory:`, `remember this:`<br>• **Remove**: `@recur remove from memory:`, `remove from mem:`, `remove mem:`, `delete from memory:`, `forget this:`<br>*(All other messages are treated as normal chat)*. | Anyone in `#recur-mem-update` (including 🔴 `Admin`, 🔵 `Core Member`, 🩷 `Volunteer`) | **Auto Updates / Removes Memory**: Appends or purges notes in `knowledge/memory_updates.md`, updates SQLite, rebuilds FAISS vectors in `< 0.1s`, hot-reloads retriever, and confirms via rich card. Directives receive authoritative priority (`+0.35` boost) across all channels. | Strict prefix validation prevents casual banter or greetings from polluting knowledge base. Hot-reload has zero downtime. |
 | **Admin Protection** | **Staff & Organizer Conversation Isolation** | Admin, Moderator, Core Member, Volunteer, or Judge chats or asks questions in ambient chat. | 🔴 `Admin`<br>🟣 `Moderator`<br>🔵 `Core Member`<br>🩷 `Volunteer`<br>🟡 `Judge` | **Bot stays completely silent in standard channels.** Never interrupts human organizers or staff (bypassed only in `#recur-mem-update`). | Verified via `_is_staff_or_bot()` and cached guild member roles. |
 | **Peer Conversation** | **Peer-to-Peer Discussion Filtering** | A user tags another participant (e.g. `@heyimsouvik What's the total size of your ppt?`) or replies inline. | Anyone | **Bot stays silent.** Does not intrude into conversations between two human members. | Evaluated via `has_other_mentions`, `is_reply_to_other`, and regex pings. |
 | **Direct Mention** | **Explicit Mentor Invocation** | Any user tags `@Recur` with a direct question or prompt. | Anyone | Direct override: Always answers questions when explicitly mentioned. | Rejects off-topic queries with polite hackathon focus reminder. |
@@ -192,7 +199,7 @@ flowchart TD
 
 | Channel | Allowed Actions | Disallowed Actions | Notification Rules |
 | :--- | :--- | :--- | :--- |
-| **`#recur-mem-update`** *(aliases: `mem-update`, `recur-memory`)* | 1. Dynamic memory updates (Strict 4 triggers: `@recur add this info in your memory ..`, `add to memory:`, `auto update memory:`, `remember this:`).<br>2. Live zero-downtime FAISS re-indexing.<br>3. Normal chat & interactive Q&A testing for organizers. | None (Staff silence restriction is completely disabled here). | Rich Discord confirmation card with re-indexing status and summary for memory updates; standard conversational reply for normal chat. |
+| **`#recur-mem-update`** *(aliases: `mem-update`, `recur-memory`)* | 1. Dynamic memory updates (Add triggers: `@recur add this info in your memory ..`, `add to memory:`, `auto update memory:`, `remember this:` / Remove triggers: `remove from mem:`, `remove mem:`, `delete from memory:`, `forget this:`).<br>2. Live zero-downtime FAISS re-indexing.<br>3. Normal chat & interactive Q&A testing for organizers. | None (Staff silence restriction is completely disabled here). | Rich Discord confirmation card with re-indexing status and summary for memory updates; standard conversational reply for normal chat. |
 | **`#general`** | Ambient hackathon Q&A, teammate search detection & forwarding, direct `@Recur` pings. | Staff conversation interruptions, peer-to-peer mention answers, off-topic chat. | Mentions author on reply; forwards team requests to `#find-your-team`. |
 | **`#ask-mentors` / `#ask-mentor`** | Official rules, judging criteria, technical stack questions, teammate search forwarding. | Intercepting questions explicitly addressed to human mentors (`"Mentors, please check..."`). | Silent fallback: Logs unanswered technical queries for human organizers. |
 | **`#find-your-team!`** | Teammate recruitment announcements, skill offers, team formation. | General chatter, unrelated queries. | Pings `@everyone` with a 60-second author cooldown. |

@@ -53,6 +53,10 @@ def clean_cognitive_response(raw_text: str, question: str = "") -> tuple[str, st
         if post_answer:
             reasoning = (reasoning + "\n" + pre_reasoning).strip() if reasoning else pre_reasoning
             cleaned = post_answer
+    elif re.search(r"\[\s*(?:READ|THINK|UNDERSTAND)\s*\]", cleaned, flags=re.IGNORECASE):
+        reasoning = cleaned
+        # Strip all [READ], [UNDERSTAND], and [THINK] blocks to avoid leaking internal deliberation
+        cleaned = re.sub(r"\[\s*(?:READ|UNDERSTAND|THINK(?:\s*&\s*DELIBERATE)?)\s*\].*?(?=(?:\[\s*[A-Z]|\Z))", "", cleaned, flags=re.DOTALL | re.IGNORECASE).strip()
 
     # 3. Strip unwanted trailing source footnotes (e.g. "\n\nSource: ...")
     cleaned = re.sub(r"\n+(?:\*\*|__)?Sources?(?:\*\*|__)?\s*:.*$", "", cleaned, flags=re.IGNORECASE | re.DOTALL).strip()

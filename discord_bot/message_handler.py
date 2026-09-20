@@ -541,6 +541,154 @@ class MessageHandler:
             logger.error("Failed to send memory update confirmation reply: %s", e)
             return False
 
+    def _extract_memory_removal(self, text: str, is_memory_channel: bool = False) -> str | None:
+        """Detects if the message is requesting to remove/forget information from memory.
+
+        Triggers:
+        1. @recur remove this info from your memory .. <target>
+        2. @recur remove from memory: <target>
+        3. remove from memory: <target>
+        4. remove from mem: <target>
+        5. remove mem: <target>
+        6. delete from memory: <target>
+        7. forget this: <target>
+        """
+        clean = text.strip()
+        if not clean:
+            return None
+
+        def _clean_payload(info_candidate: str) -> str:
+            clean_p = re.sub(r"^[\s.\-–—:/]+", "", info_candidate).strip()
+            clean_p = re.sub(
+                r"^(?:(?:and\s+)?(?:also\s+)?(?:remove\s+from\s+mem(?:ory)?|remove\s+mem(?:ory)?|delete\s+from\s+mem(?:ory)?|forget\s+this|forget)\s*[:\-–—./]*\s*)+",
+                "",
+                clean_p,
+                flags=re.IGNORECASE,
+            ).strip()
+            return clean_p
+
+        patterns = [
+            r"^(?:@?recur\s+)?(?:please\s+)?remove\s+(?:this\s+)?(?:info|information)?\s*(?:from|in)\s*(?:your\s+)?mem(?:ory)?\s*[:\-–—.]*\s*(.+)$",
+            r"^(?:@?recur\s+)?(?:please\s+)?remove\s+(?:from\s+)?mem(?:ory)?\s*[:\-–—.]*\s*(.+)$",
+            r"^(?:@?recur\s+)?(?:please\s+)?delete\s+(?:from\s+)?mem(?:ory)?\s*[:\-–—.]*\s*(.+)$",
+            r"^(?:@?recur\s+)?(?:please\s+)?forget\s+(?:this|about)?\s*[:\-–—.]*\s*(.+)$",
+        ]
+
+        for pat in patterns:
+            m = re.match(pat, clean, re.IGNORECASE | re.DOTALL)
+            if m:
+                target = _clean_payload(m.group(1))
+                if len(target) >= 2:
+                    return target
+
+        # In-line trigger search
+        trigger_match = re.search(
+            r"(?:remove\s+(?:this\s+)?(?:info\s+)?(?:from|in)\s+(?:your\s+)?mem(?:ory)?|remove\s+from\s+mem(?:ory)?|remove\s+mem(?:ory)?|delete\s+from\s+mem(?:ory)?|forget\s+(?:this|about))\s*[:\-–—.]*\s*(.+)$",
+            clean,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if trigger_match:
+            target = _clean_payload(trigger_match.group(1))
+            if len(target) >= 2:
+                return target
+
+        return None
+
+    async def _handle_memory_removal(
+        self,
+        message: discord.Message,
+        target_text: str,
+        bot_user: discord.ClientUser,
+    ) -> bool:
+        """Removes matching memory entries from knowledge/memory_updates.md, rebuilds FAISS,
+        updates the database, and confirms removal in Discord.
+        """
+        target = target_text.strip()
+        kb_file = self.config.knowledge_dir / "memory_updates.md"
+        if not kb_file.exists():
+            await message.reply(f"⚠️ Dynamic memory is currently empty. No entries found matching `{target}`.")
+            return True
+
+        content = kb_file.read_text(encoding="utf-8")
+        sections = re.split(r"(?=\n##\s+Memory\s+Update)", content)
+        if not sections:
+            await message.reply(f"⚠️ No dynamic memory entries found matching `{target}`.")
+            return True
+
+        entries = sections[1:] if len(sections) > 1 else []
+
+        remaining_entries = []
+        removed_entries = []
+
+        target_lower = target.lower()
+        target_keywords = set(re.findall(r"\b[a-z0-9_]+\b", target_lower))
+
+        for entry in entries:
+            entry_lower = entry.lower()
+            phrase_match = target_lower in entry_lower
+            entry_keywords = set(re.findall(r"\b[a-z0-9_]+\b", entry_lower))
+            keyword_overlap = bool(target_keywords and target_keywords.issubset(entry_keywords))
+
+            if phrase_match or keyword_overlap:
+                removed_entries.append(entry.strip())
+            else:
+                remaining_entries.append(entry)
+
+        if not removed_entries:
+            await message.reply(
+                f"🔍 Could not find any dynamic memory entries matching `{target}` in `knowledge/memory_updates.md`."
+            )
+            return True
+
+        now_dt = datetime.now(timezone.utc)
+        timestamp_str = now_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+        base_header = (
+            "# Recur Dynamic Memory & Live Organizer Updates\n"
+            f"*Last Updated: {timestamp_str}*\n\n"
+            "> Official dynamic updates, announcements, and memory additions provided by organizers via #recur-mem-update.\n"
+        )
+        new_content = base_header + "".join(remaining_entries)
+        kb_file.write_text(new_content.strip() + "\n", encoding="utf-8")
+
+        # Delete in SQLite database
+        deleted_db_rows = self.db.delete_memory_update(target)
+
+        # Rebuild FAISS index and reload retriever
+        reindex_details = ""
+        try:
+            if self.indexer:
+                stats = self.indexer.build_index()
+                chunk_count = stats.get("chunk_count", 0)
+                reindex_details = f"Re-indexed {chunk_count} chunks in {stats.get('time_taken', 0.0)}s."
+            if self.retriever:
+                self.retriever.load()
+            logger.info("Removed %d memory entries and reloaded retriever.", len(removed_entries))
+        except Exception as e:
+            logger.error("Failed to re-index after memory removal: %s", e)
+            reindex_details = f"Re-indexing notice: {e}"
+
+        reply_content = (
+            f"🗑️ **Memory Removed Successfully!**\n\n"
+            f"**Target Directive / Term**: `{target}`\n"
+            f"**Removed Entries**: {len(removed_entries)} memory update(s)\n\n"
+            f"✅ **Actions Completed**:\n"
+            f"• Purged from `knowledge/memory_updates.md`\n"
+            f"• Removed from database records ({deleted_db_rows} row(s))\n"
+            f"• Auto-updated vector index & reloaded retriever ({reindex_details or 'Ready'})\n"
+            f"• Recur will no longer use this directive for future queries! 🚀"
+        )
+
+        try:
+            await message.reply(
+                reply_content,
+                allowed_mentions=discord.AllowedMentions(replied_user=True),
+            )
+            return True
+        except Exception as e:
+            logger.error("Failed to send memory removal confirmation: %s", e)
+            return True
+
     def _is_staff_or_bot(
         self,
         author: discord.User | discord.Member,
@@ -748,7 +896,13 @@ class MessageHandler:
         # Check if message is in dedicated memory update channel
         is_mem_channel = self._is_memory_update_channel(message.channel)
 
-        # 1. Check for dynamic memory update requests
+        # 1. Check for dynamic memory removal or update requests
+        memory_removal_target = self._extract_memory_removal(cleaned_text, is_memory_channel=is_mem_channel)
+        if memory_removal_target:
+            handled = await self._handle_memory_removal(message, memory_removal_target, bot_user)
+            if handled:
+                return
+
         # (e.g. "@recur add this info in your memory ...", or any update in #recur-mem-update)
         memory_payload = self._extract_memory_update(cleaned_text, is_memory_channel=is_mem_channel)
         if memory_payload:

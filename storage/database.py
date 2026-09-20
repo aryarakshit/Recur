@@ -294,6 +294,17 @@ class Database:
                 for row in rows
             ]
 
+    def delete_memory_update(self, target_text: str) -> int:
+        """Deletes dynamic memory updates matching a target keyword or phrase."""
+        pattern = f"%{target_text.strip()}%"
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM memory_updates WHERE content LIKE ?", (pattern,))
+            deleted = cursor.rowcount
+            conn.commit()
+            logger.info("Deleted %d memory update records matching '%s'", deleted, target_text)
+            return deleted
+
     def log_query(
         self,
         question: str,

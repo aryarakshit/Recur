@@ -367,3 +367,65 @@ Section: Memory Update by aryarakshit (2026-09-21 02:04:00 UTC)
     # Top result MUST be the memory update!
     assert results[0].chunk.source == "memory_updates.md"
     assert "not yet disclosed" in results[0].chunk.text
+
+
+def test_extract_memory_removal_triggers(memory_handler):
+    # 1. "remove from mem: prize pool"
+    t1 = memory_handler._extract_memory_removal("remove from mem: prize pool")
+    assert t1 == "prize pool"
+
+    # 2. "remove mem: prize pool"
+    t2 = memory_handler._extract_memory_removal("remove mem: prize pool")
+    assert t2 == "prize pool"
+
+    # 3. "@recur remove this info from your memory .. prize pool"
+    t3 = memory_handler._extract_memory_removal("@recur remove this info from your memory .. prize pool")
+    assert t3 == "prize pool"
+
+    # 4. "delete from memory: judging criteria"
+    t4 = memory_handler._extract_memory_removal("delete from memory: judging criteria")
+    assert t4 == "judging criteria"
+
+    # 5. "forget this: wifi password"
+    t5 = memory_handler._extract_memory_removal("forget this: wifi password")
+    assert t5 == "wifi password"
+
+    # 6. Normal questions or chatter MUST NOT trigger removal
+    assert memory_handler._extract_memory_removal("what is the prize pool?") is None
+    assert memory_handler._extract_memory_removal("heloow recur") is None
+
+
+@pytest.mark.asyncio
+async def test_handle_memory_removal_action(memory_handler):
+    kb_file = memory_handler.config.knowledge_dir / "memory_updates.md"
+    kb_file.write_text(
+        "# Recur Dynamic Memory\n\n"
+        "## Memory Update by Organizer (2026-09-20 20:30:00 UTC)\n"
+        "- Channel: #recur-mem-update\n"
+        "- Information:\n"
+        '  if anyone asked for "Prize pool" say "not yet disclosed".\n\n'
+        "## Memory Update by Organizer (2026-09-20 21:00:00 UTC)\n"
+        "- Channel: #recur-mem-update\n"
+        "- Information:\n"
+        "  Dinner will be served at 8 PM in the cafeteria.\n",
+        encoding="utf-8",
+    )
+
+    # Log in database
+    memory_handler.db.log_memory_update("Prize pool not yet disclosed", 1, 2, "Organizer")
+    memory_handler.db.log_memory_update("Dinner at 8 PM", 1, 2, "Organizer")
+
+    msg = MagicMock()
+    msg.reply = AsyncMock()
+    bot_user = MagicMock()
+
+    handled = await memory_handler._handle_memory_removal(msg, "prize pool", bot_user)
+    assert handled is True
+    msg.reply.assert_called_once()
+    assert "Memory Removed Successfully" in msg.reply.call_args[0][0]
+
+    # Check updated file content
+    updated_content = kb_file.read_text(encoding="utf-8")
+    assert "Prize pool" not in updated_content
+    assert "Dinner will be served at 8 PM" in updated_content
+
