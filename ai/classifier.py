@@ -21,7 +21,8 @@ HACKATHON_KEYWORDS = {
     # Core event
     "hackathon", "hack", "registration", "register", "registered", "registering",
     "deadline", "submission", "submit", "submitting", "submitted",
-    "team", "teams", "teammate", "teammates", "solo", "member", "members",
+    "team", "teams", "teammate", "teammates", "teamate", "teamates", "solo", "member", "members",
+    "finding", "seek", "seeking",
     "eligibility", "eligible", "prize", "prizes", "award", "awards",
     "bounty", "bounties", "judging", "judge", "judges", "mentor", "mentors",
     "venue", "schedule", "timeline", "problem statement", "rules", "rule",
@@ -55,7 +56,7 @@ HACKATHON_KEYWORDS = {
 # Casual chatter patterns to ignore
 NOISE_PATTERNS = [
     r"^(\s*bro\s*|\s*dude\s*|\s*guys\s*|\s*yo\s*)*\s*(lol|lmao|haha|rofl|kek|xd)+\s*$",
-    r"^(hi|hello|hey|sup|gm|gn|good\s+morning|good\s+night|good\s+evening)\s*(!+|\.+)*$",
+    r"^(hi|hello|hey|sup|gm|gn|good\s+morning|good\s+night|good\s+evening)(\s+(guys|all|everyone|folks|people|there|y'all))?\s*(!+|\.+)*$",
     r"^(nice|cool|awesome|great|congrats|gg|rip|wow|super|agree|true|fr|ikr)\s*(!+|\.+)*$",
     r"^<a?:[a-zA-Z0-9_]+:[0-9]+>$",  # Discord custom emoji
     r"^[\U00010000-\U0010ffff\u2600-\u26ff\u2700-\u27bf\s]+$",  # Emoji-only strings
@@ -95,14 +96,18 @@ class MessageClassifier:
                 return False
 
         patterns = [
+            # Direct "finding / find / seeking / looking for / need / want" teammates or team (including typos like 'teamates')
+            r"\b(?:i\s*(?:'?m|am)?\s*)?(?:find|finding|search|searching|seek|seeking|look|looking|need|needing|want|wanting)\s+(?:for\s+)?(?:a\s+|an\s+|any\s+|some\s+|more\s+|new\s+|good\s+)?(?:team|teams|team-?m?ates?|members?|partners?|squad)\b",
+            # Finding teammates with typo or short form
+            r"\b(?:find|finding|look|looking|seek|seeking)\s+(?:a\s+)?(?:team|teams|teammates?|teamates?)\b",
             # Looking for members / teammates
-            r"\blooking\s+for\s+.*(member|members|teammate|teammates|dev|developer|partner|team|group|person|people)\b",
+            r"\blooking\s+for\s+.*(member|members|teammate|teammates|teamate|teamates|dev|developer|partner|team|group|person|people)\b",
             # Looking to join a team
             r"\blooking\s+to\s+join\s+.*team\b",
             r"\blooking\s+to\s+team\s*up\b",
             r"\blooking\s+for\s+(a\s+)?team\b",
             # Need member / teammates
-            r"\bneed\s+.*(member|members|teammate|teammates|frontend|backend|dev|designer)\b",
+            r"\bneed\s+.*(member|members|teammate|teammates|teamate|teamates|frontend|backend|dev|designer)\b",
             r"\b(team\s+needs?|team\s+requires?)\b",
             # Join my / our team
             r"\bjoin\s+(my|our|a)\s+team\b",
@@ -110,7 +115,7 @@ class MessageClassifier:
             r"\b(interested\s+.*(dm|pm|reply|ping)|reply\s+or\s+dm|dm\s+me|pm\s+me|ping\s+me|contact\s+me)\b",
             # Team formation inquiries to peers: anyone want to join / team up
             r"\banyone\s+(want|wanna|interested)\s+(to\s+)?(join|team\s*up|partner)\b",
-            r"\banyone\s+(need|needs|looking\s+for)\s+(a\s+)?(teammate|member|team)\b",
+            r"\banyone\s+(need|needs|looking\s+for|finding|search|searching\s+for)\s+(a\s+)?(teammate|teammates|teamate|teamates|member|members|team)\b",
             r"\b(who\s+(wants?|wanna)\s+to\s+(join|team\s*up|partner))\b",
             r"\b(team\s*up\s+with(\s+me)?)\b",
             r"\b(forming\s+(a\s+)?team|building\s+(a\s+)?team|create\s+(a\s+)?team)\b",
@@ -126,12 +131,15 @@ class MessageClassifier:
 
         # Check combination of peer recruitment signals
         recruiting_signals = 0
-        if any(w in clean for w in ["looking for", "need", "require", "searching for", "join"]):
+        if any(w in clean for w in ["looking for", "need", "require", "searching for", "searching", "join", "find", "finding", "seek", "seeking", "want"]):
             recruiting_signals += 1
-        if any(w in clean for w in ["team", "teammate", "teammates", "member", "members"]):
+        if any(w in clean for w in ["team", "teams", "teammate", "teammates", "teamate", "teamates", "member", "members", "partner", "partners", "squad"]):
             recruiting_signals += 1
         if any(w in clean for w in ["dm", "pm", "reply", "interested", "available", "domains", "frontend", "backend"]):
             recruiting_signals += 1
+
+        if recruiting_signals >= 2 and any(w in clean for w in ["find", "finding", "seeking", "looking for", "searching for", "need"]):
+            return True
 
         if recruiting_signals >= 3:
             return True

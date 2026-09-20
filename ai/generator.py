@@ -80,7 +80,7 @@ class AnswerGenerator:
             # If candidates were retrieved (e.g. conversational/long phrasing where similarity
             # was slightly below strict threshold), utilize top candidates for situational grounding
             if retrieval_results:
-                relevant_results = retrieval_results[:3]
+                relevant_results = retrieval_results[:4]
 
         if not relevant_results:
             # If question might have answer on Devfolio or website, try live sync

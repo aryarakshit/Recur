@@ -63,7 +63,7 @@ class KnowledgeRetriever:
         self,
         query: str,
         top_k: int = 4,
-        min_score: float = 0.18,
+        min_score: float = 0.12,
     ) -> list[RetrievalResult]:
         """Queries the FAISS index and returns top relevant chunks."""
         if not self.is_ready():

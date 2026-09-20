@@ -183,9 +183,9 @@ class LiveWebSync:
         timeline_lines = "\n".join(f"- {item}" for item in devfolio.get("timeline", []))
         if not timeline_lines:
             timeline_lines = (
-                "- 06 Sep 2026: Registrations & Idea Submission begin on Devfolio\n"
-                "- 20 Sep 2026: Registrations & PPT Submission deadline\n"
-                "- 08 Oct 2026: In-Person Hackathon at GNIT Kolkata (09:00 - 18:00 IST)"
+                "- 06 Sep 2026: Registrations begin on Devfolio\n"
+                "- 20 Sep 2026: Registration deadline (closes: 24 Sep 2026)\n"
+                "- 08 Oct 2026: In-Person Hackathon at GNIT Kolkata (10:00 AM – 6:00 PM IST; Check-in 08:00 AM; Code Freeze 05:00 PM)"
             )
 
         announcements = devfolio.get("announcements", []) + website.get("announcements", [])
@@ -202,7 +202,7 @@ class LiveWebSync:
 *Last Live Synced: {now_utc}*
 
 ## Devfolio Registration, Deadlines & Timeline
-- **Event**: {devfolio.get('name', 'RECURSIVE 2026')}
+- **Event**: {devfolio.get('name', 'RECURSIVE — Shift-8 Hackathon 2026')}
 - **Devfolio URL**: {devfolio['url']}
 - **Schedule URL**: {devfolio['schedule_url']}
 - **Team Size**: {devfolio.get('team_size', '2–4 members')}
@@ -215,7 +215,7 @@ class LiveWebSync:
 - **Parent Site**: {website['url']}
 - **Venue**: {website['venue']}
 - **Official Tracks**: {', '.join(website.get('tracks', []))}
-- **Deadlines Policy**: Registrations and PPT idea submissions are submitted on Devfolio. If an extension is granted by organizers, it will be posted on Devfolio at <https://recursiveacm.devfolio.co> and in the official Discord announcements.
+- **Deadlines Policy**: Registrations and project submissions are submitted on Devfolio. If an extension is granted by organizers, it will be posted on Devfolio at <https://recursiveacm.devfolio.co> and in the official Discord announcements.
 """
         return content.strip()
 

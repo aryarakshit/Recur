@@ -122,6 +122,12 @@ class MessageHandler:
             True if handled (either replied with @everyone or ignored as non-question chatter).
             False if it is a direct mention question that should fall back to the Q&A pipeline.
         """
+        # Ignore bots and Dyno
+        if getattr(message.author, "bot", False) or message.author.id == bot_user.id:
+            return True
+        if "dyno" in getattr(message.author, "name", "").lower():
+            return True
+
         text = self._clean_content(message, bot_user)
         if not text:
             return True
@@ -137,10 +143,15 @@ class MessageHandler:
 
         # In a dedicated team-finding channel, also match non-chatter messages discussing teams or recruitment
         if not is_teammate:
-            has_team_word = any(w in clean for w in ["team", "teammate", "teammates", "member", "members", "group", "squad"])
+            has_team_word = any(
+                w in clean
+                for w in ["team", "teams", "teammate", "teammates", "teamate", "teamates", "member", "members", "group", "squad"]
+            )
             has_recruitment_word = any(
-                w in clean for w in [
-                    "looking", "need", "require", "seeking", "join", "vacancy", "vacancies",
+                w in clean
+                for w in [
+                    "find", "finding", "seek", "seeking", "search", "searching", "look", "looking",
+                    "need", "require", "join", "vacancy", "vacancies",
                     "spot", "spots", "slot", "slots", "open", "available", "dm", "pm",
                     "frontend", "backend", "fullstack", "dev", "developer", "designer", "ai", "ml"
                 ]
@@ -386,7 +397,32 @@ class MessageHandler:
             if handled:
                 return
 
-        # 2. Author & Role validation: Only reply to 'Hacker' (participants), ignore bots & staff
+        cleaned_text = self._clean_content(message, bot_user)
+        if not cleaned_text:
+            return
+
+        # 2. Check if message is a teammate recruitment search in an allowed channel (#general, #ask-mentors, etc.)
+        if self.classifier.is_teammate_search(cleaned_text):
+            if self._is_channel_allowed(message.channel) or is_mentioned or is_reply_to_bot:
+                # Exclude bots, Dyno, admins, moderators, and staff from triggering recruitment forwards
+                is_staff_or_bot = getattr(message.author, "bot", False) or message.author.id == bot_user.id
+                if "dyno" in getattr(message.author, "name", "").lower():
+                    is_staff_or_bot = True
+                if not is_staff_or_bot and hasattr(message.author, "roles"):
+                    role_names = [r.name.lower() for r in message.author.roles]
+                    perms = getattr(message.author, "guild_permissions", None)
+                    is_admin_or_mod = bool(perms and getattr(perms, "administrator", False)) or any(
+                        "admin" in r or "administrator" in r or "moderator" in r or "mod" in r for r in role_names
+                    )
+                    has_excluded_role = any(ex in r for ex in self.config.excluded_role_names for r in role_names)
+                    if is_admin_or_mod or has_excluded_role:
+                        is_staff_or_bot = True
+
+                if not is_staff_or_bot:
+                    await self._forward_team_finding_message(message, cleaned_text)
+                    return
+
+        # 3. Author & Role validation: Only reply to participants, ignore bots & staff
         author_allowed, author_reason = self._is_author_allowed(
             author=message.author,
             bot_user=bot_user,
@@ -396,7 +432,7 @@ class MessageHandler:
             logger.info("Ignoring message from %s: %s", message.author, author_reason)
             return
 
-        # 3. Channel validation: Only reply in 'general' and 'ask-mentors' (unless directly mentioned)
+        # 4. Channel validation: Only reply in 'general' and 'ask-mentors' (unless directly mentioned)
         if not self._is_channel_allowed(message.channel) and not (is_mentioned or is_reply_to_bot):
             channel_name = getattr(message.channel, "name", "DM")
             logger.info(
@@ -404,15 +440,6 @@ class MessageHandler:
                 channel_name,
                 self.config.allowed_channel_names,
             )
-            return
-
-        cleaned_text = self._clean_content(message, bot_user)
-        if not cleaned_text:
-            return
-
-        # 4. If participant posted a teammate request in #general or #ask-mentors, forward it to #find-your-team! with @everyone
-        if self.classifier.is_teammate_search(cleaned_text):
-            await self._forward_team_finding_message(message, cleaned_text)
             return
 
         # Get recent channel context for ambiguous classifier decisions

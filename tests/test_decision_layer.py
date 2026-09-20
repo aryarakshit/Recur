@@ -59,6 +59,8 @@ async def test_answers_clear_hackathon_questions_without_mention(classifier):
 @pytest.mark.asyncio
 async def test_ignores_casual_chatter(classifier):
     chatter_messages = [
+        "Hi guys",
+        "hello guys",
         "bro look at this \U0001f602",
         "good morning everyone",
         "\U0001f602\U0001f602\U0001f602",
@@ -89,7 +91,12 @@ async def test_ignores_chatter_mentioning_other_user(classifier):
 @pytest.mark.asyncio
 async def test_ignores_teammate_recruitment_and_lfg(classifier):
     teammate_searches = [
-        # User's exact message
+        # User's exact message from screenshot
+        "I am finding teamates",
+        "finding teammates",
+        "seeking teamates",
+        "find teamates",
+        # User's exact recruitment message
         "Hi guys ,I am looking for two members to join my team Available Domains-applied ai(crew- ai) Frontend -next.js If anyone interested kindly reply or dm",
         "Looking for 1 frontend dev to join our team",
         "Hey everyone, looking for 2 members for AI track, DM me if interested",
@@ -100,6 +107,7 @@ async def test_ignores_teammate_recruitment_and_lfg(classifier):
         "Join my team, we need 1 more member",
     ]
     for msg in teammate_searches:
+        assert classifier.is_teammate_search(msg) is True, f"Failed to detect teammate search: '{msg}'"
         should_reply, reason = await classifier.should_reply(
             content=msg,
             is_bot_mentioned=False,

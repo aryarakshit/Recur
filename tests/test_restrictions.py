@@ -297,6 +297,127 @@ async def test_forward_team_finding_message_from_general():
 
 
 @pytest.mark.asyncio
+async def test_finding_teamates_in_team_finding_channel():
+    from unittest.mock import AsyncMock
+    from ai.classifier import MessageClassifier
+    from ai.provider import MockProvider
+
+    cfg = Config()
+    classifier = MessageClassifier(MockProvider())
+    handler = MessageHandler(
+        classifier=classifier,
+        generator=MagicMock(),
+        retriever=MagicMock(),
+        memory=MagicMock(),
+        database=MagicMock(),
+        config=cfg,
+    )
+
+    bot_user = MagicMock()
+    bot_user.id = 999999
+
+    ch = MagicMock()
+    ch.name = "find-your-team!"
+    ch.parent = None
+
+    author = MagicMock()
+    author.name = "Aniruddh"
+    author.id = 77777
+    author.bot = False
+    author.mention = "<@77777>"
+    author.roles = [MagicMock(name="@everyone")]
+    author.guild_permissions.administrator = False
+
+    msg = MagicMock()
+    msg.channel = ch
+    msg.author = author
+    msg.content = "I am finding teamates"
+    msg.mentions = []
+    msg.reference = None
+    msg.reply = AsyncMock()
+
+    handled = await handler._handle_team_finding_message(msg, bot_user)
+    assert handled is True
+    msg.reply.assert_called_once()
+    call_args, call_kwargs = msg.reply.call_args
+    assert "@everyone" in call_args[0]
+    assert call_kwargs.get("allowed_mentions").everyone is True
+
+
+@pytest.mark.asyncio
+async def test_finding_teamates_forwarded_from_general_new_member():
+    from unittest.mock import AsyncMock
+    from ai.classifier import MessageClassifier
+    from ai.provider import MockProvider
+
+    cfg = Config()
+    classifier = MessageClassifier(MockProvider())
+    handler = MessageHandler(
+        classifier=classifier,
+        generator=MagicMock(),
+        retriever=MagicMock(),
+        memory=MagicMock(),
+        database=MagicMock(),
+        config=cfg,
+    )
+
+    bot_user = MagicMock()
+    bot_user.id = 999999
+
+    ch_general = MagicMock()
+    ch_general.name = "general"
+    ch_general.mention = "<#1111>"
+    ch_general.parent = None
+
+    ch_team = MagicMock()
+    ch_team.name = "find-your-team!"
+    ch_team.mention = "<#2222>"
+    ch_team.send = AsyncMock()
+
+    guild = MagicMock()
+    guild.name = "Recursive Hackathon"
+    guild.text_channels = [ch_general, ch_team]
+    ch_general.guild = guild
+
+    # Newly joined member who only has @everyone (no explicit Hacker role yet)
+    role_everyone = MagicMock()
+    role_everyone.name = "@everyone"
+    author = MagicMock()
+    author.name = "Aniruddh"
+    author.id = 88888
+    author.bot = False
+    author.mention = "<@88888>"
+    author.roles = [role_everyone]
+    author.guild_permissions.administrator = False
+
+    msg = MagicMock()
+    msg.channel = ch_general
+    msg.guild = guild
+    msg.author = author
+    msg.content = "I am finding teamates"
+    msg.mentions = []
+    msg.reference = None
+    msg.jump_url = "https://discord.com/channels/1/2/4"
+    msg.reply = AsyncMock()
+
+    await handler.handle_message(msg, bot_user)
+
+    # Assert message was forwarded to #find-your-team! with @everyone
+    ch_team.send.assert_called_once()
+    send_args, send_kwargs = ch_team.send.call_args
+    assert "@everyone" in send_args[0]
+    assert "<@88888>" in send_args[0]
+    assert "I am finding teamates" in send_args[0]
+    assert send_kwargs.get("allowed_mentions").everyone is True
+
+    # Assert reply was sent to Aniruddh in #general
+    msg.reply.assert_called_once()
+    reply_args, _ = msg.reply.call_args
+    assert "<#2222>" in reply_args[0] or "find-your-team" in reply_args[0]
+    assert "<@88888>" in reply_args[0]
+
+
+@pytest.mark.asyncio
 async def test_suppresses_fallback_response_in_ambient_chat():
     from unittest.mock import AsyncMock, MagicMock
     from ai.classifier import MessageClassifier

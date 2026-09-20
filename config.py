@@ -46,14 +46,20 @@ class Config:
     allowed_channel_names: list[str] = field(
         default_factory=lambda: [
             c.strip().lower().lstrip("#")
-            for c in os.getenv("ALLOWED_CHANNELS", "general,ask-mentors").split(",")
+            for c in os.getenv(
+                "ALLOWED_CHANNELS",
+                "general,ask-mentors,ask-mentor,chat,general-chat,discussion,lounge,welcome,introductions",
+            ).split(",")
             if c.strip()
         ]
     )
     allowed_role_names: list[str] = field(
         default_factory=lambda: [
             r.strip().lower()
-            for r in os.getenv("ALLOWED_ROLES", "hacker,hackers,participant,participants").split(",")
+            for r in os.getenv(
+                "ALLOWED_ROLES",
+                "hacker,hackers,participant,participants,member,members,attendee,attendees,student,students",
+            ).split(",")
             if r.strip()
         ]
     )
@@ -73,7 +79,10 @@ class Config:
     team_finding_channel_names: list[str] = field(
         default_factory=lambda: [
             c.strip().lower().lstrip("#")
-            for c in os.getenv("TEAM_FINDING_CHANNELS", "find-your-team,find-your-team!").split(",")
+            for c in os.getenv(
+                "TEAM_FINDING_CHANNELS",
+                "find-your-team,find-your-team!,find-team,find-teams,find-a-team,team-finder,find-your-teammate",
+            ).split(",")
             if c.strip()
         ]
     )
