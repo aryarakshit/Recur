@@ -29,17 +29,18 @@ flowchart TD
         Router{"Routing Decision"}
     end
 
-    subgraph RAG_Layer["4. RAG, Dynamic Memory & Live Sync Layer"]
-        Retriever["Knowledge Retriever\n(FAISS Vector Index + Top-4 Semantic Search)"]
+    subgraph RAG_Layer["4. Hybrid RAG, Dynamic Memory & Live Sync Layer"]
+        Normalizer["Query Normalizer\n(Strips 'so recur', fixes typos e.g. pricepool -> prize pool)"]
+        Retriever["Hybrid Knowledge Retriever\n(Dense FAISS Vectors + Lexical Keyword Overlap)"]
         LiveSync["LiveWebSync (Every 15 min)\n(Scrapes recursiveacm.devfolio.co & recursiveacm.in)"]
-        MemUpdate["#recur-mem-update Handler\n(Dynamic Memory Injection & Live Re-Indexing)"]
+        MemUpdate["#recur-mem-update Handler\n(Strict 4 Triggers + Live FAISS Re-Indexing)"]
         KnowledgeBase[("16 Official Knowledge Docs\n+ live_updates.md\n+ memory_updates.md")]
     end
 
     subgraph Cognitive_Layer["5. 4-Step Cognitive Engine"]
         Read["[READ]\nIngest query, tone, emotional anxiety, RAG context"]
         Understand["[UNDERSTAND]\nIdentify explicit vs implicit blockers & phase"]
-        Think["[THINK & DELIBERATE]\nCross-reference rubric (25/25/25/15/10) & policy"]
+        Think["[THINK & DELIBERATE]\nCross-reference rubric & prioritize memory_updates.md"]
         Reply["[REPLY]\nFormulate warm, high-IQ mentor guidance"]
         Cleaner["clean_cognitive_response()\n(Extracts logs, delivers clean Discord text)"]
     end
@@ -59,10 +60,10 @@ flowchart TD
     RoleFilter -- "Bot / Dyno" --> Silent
     RoleFilter -- "Verified Hacker / Participant" --> PeerFilter
 
-    MemUpdate -- "Memory payload" --> KnowledgeBase
+    MemUpdate -- "Explicit Memory Trigger (4 Patterns)" --> KnowledgeBase
     KnowledgeBase -. Re-Index .-> Retriever
-    MemUpdate -- "Confirmation" --> MemConfirm
-    MemUpdate -- "Question in channel" --> Retriever
+    MemUpdate -- "Confirmation Card" --> MemConfirm
+    MemUpdate -- "Normal Chat / Question" --> Normalizer
 
     PeerFilter -- "Addressed to other user (@user / reply)" --> Silent
     PeerFilter -- "Hackathon inquiry" --> Heuristics
@@ -72,7 +73,8 @@ flowchart TD
     Heuristics -- "Ambiguous" --> Classifier --> Router
 
     Router -- "Teammate Search" --> ForwardTeam
-    Router -- "Hackathon Question" --> Retriever
+    Router -- "Hackathon Question" --> Normalizer
+    Normalizer --> Retriever
     LiveSync -.-> KnowledgeBase -.-> Retriever
     Retriever --> Read --> Understand --> Think --> Reply --> Cleaner --> SendReply
 ```
@@ -84,7 +86,7 @@ flowchart TD
 ### Layer 1: Discord Ingestion & Gateway Layer
 - **`bot.py`**: Initializes `commands.Bot` with `intents.message_content = True`. Privileged gateway `intents.members` is intentionally set to `False` to prevent `PrivilegedIntentsRequired` gateway connection crashes when Server Members Intent is not toggled in developer portal.
 - **Health Check & Keep-Alive**: Runs an internal multi-threaded HTTP server (`0.0.0.0:7860`) returning `200 OK` for continuous uptime on Render and a 9-minute self-ping loop preventing container sleep.
-- **Background Scanner**: Uses `discord.ext.tasks.loop(minutes=5)` to scan `#general` and `#ask-mentors` for unanswered questions or missed teammate searches.
+- **Background Scanner**: Uses `discord.ext.tasks.loop(minutes=5)` to scan `#general`, `#ask-mentors`, and `#recur-mem-update` for unanswered questions or missed teammate searches.
 
 ### Layer 2: Role, Permission & Peer Filtering Layer
 - **`_resolve_member()`**: Resolves raw `discord.User` instances from history into full `discord.Member` objects via guild cache or Discord HTTP REST API (`guild.fetch_member()`), backed by a 300-second in-memory TTL cache. This bypasses the need for privileged gateway intents entirely.
@@ -96,6 +98,7 @@ flowchart TD
   - 🟡 **Judge** (`Judge` role)
   - ⚪ **Bot / Dyno** (`Bot`, `Dyno` roles)
   - 🟢 **Hacker** (`Hacker` role — only verified participants receive ambient answers)
+  - *Exception*: In **`#recur-mem-update`**, all staff restrictions are automatically bypassed.
 - **Peer-Mention & Reply Suppression**: Inspects `message.mentions`, `message.reference`, and regex patterns (`@username`). If a message is directed to another person, the bot stays silent.
 
 ### Layer 3: Two-Stage Decision Layer with Situational Awareness
@@ -106,9 +109,23 @@ flowchart TD
   - **Think & Deliberate**: Decides whether answering adds genuine value or would be redundant/intrusive over a human mentor.
   - **Reply / Not Reply**: If already handled or answered by staff/peers -> **STAYS SILENT (NO REPLY)**. Only responds if the inquiry genuinely remains unaddressed.
 
-### Layer 4: Knowledge, RAG & Live Sync Layer
-- **Dense Vector Search**: FAISS index built on 16 official hackathon documents spanning rules, schedules, venue details, submission criteria, FAQs, and prize tracks.
+### Layer 4: Hybrid RAG, Dynamic Memory & Live Sync Layer
+- **Query Normalization Engine (`normalize_query_text`)**:
+  - Strips leading conversational bot addresses (`so recur `, `hey recur `, `recur `).
+  - Normalizes common phonetic typos and compound words (e.g. `pricepool` $\rightarrow$ `prize pool`, `prices` $\rightarrow$ `prizes`, `teamates` $\rightarrow$ `teammates`, `submition` $\rightarrow$ `submission`).
+- **Hybrid Retrieval Architecture (Dense Vector + Lexical Overlap)**:
+  - **Dense Vector Search**: FAISS index built on 16 official hackathon documents spanning rules, schedules, venue details, submission criteria, FAQs, and prize tracks.
+  - **Lexical Keyword Overlap**: Content keyword matching with English stop-word filtering prevents generic documents (like `chair.md`) from dominating short queries.
+  - **Dynamic Organizer Memory Priority**: All entries in `knowledge/memory_updates.md` are evaluated across a 25-candidate window and given an organizer priority boost (`+0.35`) when query keywords match live organizer directives.
 - **`LiveWebSync` (Periodic Scraper)**: Scrapes `https://recursiveacm.devfolio.co/` and `https://recursiveacm.in` every 15 minutes, automatically updating `knowledge/live_updates.md` and triggering incremental FAISS re-indexing.
+- **Dynamic Memory Ingestion (`#recur-mem-update`)**:
+  - Strictly listens to the 4 explicit triggers:
+    1. `@recur add this info in your memory .. <info>`
+    2. `add to memory: <info>`
+    3. `auto update memory: <info>`
+    4. `remember this: <info>`
+  - Automatically commits to `memory_updates.md`, records in SQLite database, rebuilds FAISS vectors in `< 0.1s`, and hot-reloads the retriever with zero downtime.
+  - All other messages are handled as normal conversation.
 
 ### Layer 5: 4-Step Cognitive Architecture
 - **Active Production Models**:
@@ -134,13 +151,13 @@ flowchart TD
 
 | Category | Capability | Trigger Condition | Target Audience | Behavior & Output | Safety & Safeguards |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Q&A & Guidelines** | **Automated Hackathon Support** | Participant asks question about dates, venue, eligibility, rules, or prizes in `#general` or `#ask-mentors`. | 🟢 `Hacker` | Provides instant, grounded answers using official docs and live Devfolio timeline. | Cites official rules without leaking internal prompt or raw source tags. |
+| **Q&A & Guidelines** | **Automated Hackathon Support** | Participant asks question about dates, venue, eligibility, rules, or prizes in `#general` or `#ask-mentors`. | 🟢 `Hacker` | Provides instant, grounded answers using official docs and live Devfolio timeline via Hybrid RAG. | Cites official rules without leaking internal prompt or raw source tags. |
 | **Cognitive Reasoning** | **Situational Anxiety De-escalation** | Participant expresses panic (e.g., last-minute PPT submission, prototype readiness, teammate dropouts). | 🟢 `Hacker` | Explains zero-penalty policy before deadline, advises 15-min Devfolio traffic buffer, and clarifies Round 1 PPT vs Round 2 Prototype requirements. | Internal `[THINK]` logs saved to server; Discord sees only clean mentor guidance. |
 | **Team Recruitment** | **Teammate Request Auto-Forwarding** | Hacker posts teammate recruitment in `#general` or `#ask-mentors` (e.g. *"I am finding teamates"*). | 🟢 `Hacker` / New Member | Forwards request to `#find-your-team` with `@everyone`, quote block, and jump link. Replies to user in chat. | 60-second user cooldown prevents `@everyone` ping spam. |
 | **Team Recruitment** | **In-Channel Team Search Response** | Hacker posts skill set and recruitment request inside `#find-your-team!`. | 🟢 `Hacker` / New Member | Replies in `#find-your-team!` tagging `@everyone` to maximize peer visibility. | Ignores casual greetings and non-recruitment chat in the channel. |
 | **Background Loop** | **Unanswered Message Catch-Up with Situational Awareness** | A participant's question or teammate search was missed or left without reply (on bot boot or every 5 mins). | 🟢 `Hacker` | Scans recent channel history, answers genuinely unanswered queries, and forwards missed teammate searches. | **Situational Check**: Stays silent if a mentor/staff answered in subsequent messages, if someone tagged the author, if author self-resolved, or if Discord reply was used. Never talks over human mentors. |
 | **Live Web Sync** | **Real-Time Deadline & Schedule Updates** | Organizer updates Devfolio schedule or website (e.g. PPT deadline extension). | Everyone | Scrapes site every 15 minutes, indexes changes into FAISS, and answers participants with live dates. | Falls back to cached data if Devfolio or website is temporarily unreachable. |
-| **Dynamic Memory** | **Live Organizer Memory Ingestion & Re-Index** | Organizer posts `@recur add this info in your memory .. <info>` or any declarative update in `#recur-mem-update`. | Anyone in `#recur-mem-update` (including 🔴 `Admin`, 🔵 `Core Member`, 🩷 `Volunteer`) | **Auto Updates Memory**: Appends note to `knowledge/memory_updates.md`, records in database, re-indexes FAISS vector database in < 0.1s, reloads retriever, and confirms via rich card. Also answers any question asked in this channel. | Zero-downtime hot reload across all channels. |
+| **Dynamic Memory** | **Live Organizer Memory Ingestion & Re-Index** | Organizer posts one of 4 strict triggers in `#recur-mem-update`:<br>1. `@recur add this info in your memory .. <info>`<br>2. `add to memory: <info>`<br>3. `auto update memory: <info>`<br>4. `remember this: <info>`<br>*(All other messages are treated as normal chat)*. | Anyone in `#recur-mem-update` (including 🔴 `Admin`, 🔵 `Core Member`, 🩷 `Volunteer`) | **Auto Updates Memory**: Appends note to `knowledge/memory_updates.md`, logs to SQLite, rebuilds FAISS vectors in `< 0.1s`, hot-reloads retriever, and confirms via rich card. Directives receive authoritative priority (`+0.35` boost) across all channels. | Strict prefix validation prevents casual banter or greetings from polluting knowledge base. Hot-reload has zero downtime. |
 | **Admin Protection** | **Staff & Organizer Conversation Isolation** | Admin, Moderator, Core Member, Volunteer, or Judge chats or asks questions in ambient chat. | 🔴 `Admin`<br>🟣 `Moderator`<br>🔵 `Core Member`<br>🩷 `Volunteer`<br>🟡 `Judge` | **Bot stays completely silent in standard channels.** Never interrupts human organizers or staff (bypassed only in `#recur-mem-update`). | Verified via `_is_staff_or_bot()` and cached guild member roles. |
 | **Peer Conversation** | **Peer-to-Peer Discussion Filtering** | A user tags another participant (e.g. `@heyimsouvik What's the total size of your ppt?`) or replies inline. | Anyone | **Bot stays silent.** Does not intrude into conversations between two human members. | Evaluated via `has_other_mentions`, `is_reply_to_other`, and regex pings. |
 | **Direct Mention** | **Explicit Mentor Invocation** | Any user tags `@Recur` with a direct question or prompt. | Anyone | Direct override: Always answers questions when explicitly mentioned. | Rejects off-topic queries with polite hackathon focus reminder. |
@@ -175,7 +192,7 @@ flowchart TD
 
 | Channel | Allowed Actions | Disallowed Actions | Notification Rules |
 | :--- | :--- | :--- | :--- |
-| **`#recur-mem-update`** *(aliases: `mem-update`, `recur-memory`)* | Dynamic memory updates (`@recur add this info in your memory ..`), instant FAISS re-indexing, interactive Q&A testing for organizers. | None (Staff silence restriction is completely disabled here). | Rich Discord confirmation card with re-indexing status and summary. |
+| **`#recur-mem-update`** *(aliases: `mem-update`, `recur-memory`)* | 1. Dynamic memory updates (Strict 4 triggers: `@recur add this info in your memory ..`, `add to memory:`, `auto update memory:`, `remember this:`).<br>2. Live zero-downtime FAISS re-indexing.<br>3. Normal chat & interactive Q&A testing for organizers. | None (Staff silence restriction is completely disabled here). | Rich Discord confirmation card with re-indexing status and summary for memory updates; standard conversational reply for normal chat. |
 | **`#general`** | Ambient hackathon Q&A, teammate search detection & forwarding, direct `@Recur` pings. | Staff conversation interruptions, peer-to-peer mention answers, off-topic chat. | Mentions author on reply; forwards team requests to `#find-your-team`. |
 | **`#ask-mentors` / `#ask-mentor`** | Official rules, judging criteria, technical stack questions, teammate search forwarding. | Intercepting questions explicitly addressed to human mentors (`"Mentors, please check..."`). | Silent fallback: Logs unanswered technical queries for human organizers. |
 | **`#find-your-team!`** | Teammate recruitment announcements, skill offers, team formation. | General chatter, unrelated queries. | Pings `@everyone` with a 60-second author cooldown. |
@@ -194,7 +211,7 @@ sequenceDiagram
     participant Discord as Discord Gateway
     participant Handler as MessageHandler
     participant Classifier as Decision Layer
-    participant RAG as KnowledgeRetriever & LiveSync
+    participant RAG as Hybrid KnowledgeRetriever & LiveSync
     participant LLM as Cognitive Engine (Read-Understand-Think-Reply)
     participant TeamCh as #find-your-team
 
@@ -211,7 +228,7 @@ sequenceDiagram
     Handler->>Handler: _resolve_member() -> "Hacker" (Green Role)
     Handler->>Classifier: should_reply() -> True (Hackathon Question)
     Handler->>RAG: retrieve("last minute submission affect selection")
-    RAG-->>Handler: Top 4 chunks (Judging rubric, Devfolio schedule)
+    RAG-->>Handler: Top chunks (Judging rubric, Devfolio schedule)
     Handler->>LLM: 4-Step Cognitive Prompt
     LLM->>LLM: [READ] -> [UNDERSTAND] -> [THINK] -> [REPLY]
     LLM-->>Handler: Clean empathetic answer (Zero penalty before cutoff)
@@ -223,4 +240,20 @@ sequenceDiagram
     Handler->>Classifier: is_teammate_search() -> True
     Handler->>TeamCh: Send @everyone announcement + jump link
     Handler->>Discord: Reply to Hacker confirming forward to #find-your-team
+
+    Note over Admin, Discord: Scenario D: Organizer updating dynamic memory in #recur-mem-update
+    Admin->>Discord: "@recur add this info in your memory .. if anyone asked for prize pool say not yet disclosed"
+    Discord->>Handler: on_message() in #recur-mem-update
+    Handler->>Handler: _extract_memory_update() -> Matches explicit trigger
+    Handler->>Handler: Commit to knowledge/memory_updates.md & DB
+    Handler->>RAG: trigger_reindex() -> Hot reload FAISS (<0.1s)
+    Handler->>Discord: Send rich green confirmation card
+    Note over Hacker, Discord: Subsequent query anywhere: "so recur what is the pricepool?"
+    Hacker->>Discord: "so recur what is the pricepool?"
+    Discord->>Handler: on_message()
+    Handler->>RAG: normalize_query_text() -> "prize pool"
+    Handler->>RAG: retrieve("prize pool") -> Hybrid search prioritizes memory_updates.md (+0.35 boost)
+    Handler->>LLM: Cognitive prompt with organizer directive as top authority
+    LLM-->>Handler: "The prize pool is not yet disclosed..."
+    Handler->>Discord: Reply to Hacker
 ```
