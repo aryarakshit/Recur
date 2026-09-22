@@ -142,6 +142,7 @@ def main() -> None:
         knowledge_dir=config.knowledge_dir,
         indexer=indexer,
         retriever=retriever,
+        db=db,
     )
     live_sync.start_periodic_sync(interval_seconds=900)
 
@@ -223,6 +224,10 @@ def main() -> None:
         if not periodic_catch_up.is_running():
             periodic_catch_up.start()
 
+        # Start scheduled daily memory self-update task
+        if not daily_memory_sync.is_running():
+            daily_memory_sync.start()
+
     @tasks.loop(minutes=5)
     async def periodic_catch_up() -> None:
         """Periodic background task to catch up on any missed or unanswered messages."""
@@ -236,6 +241,21 @@ def main() -> None:
                 logger.info("Periodic catch-up: processed %d unanswered message(s).", count)
         except Exception as e:
             logger.debug("Error in periodic catch-up task: %s", e)
+
+    @tasks.loop(hours=24)
+    async def daily_memory_sync() -> None:
+        """Daily 24-hour maintenance task to refresh Devfolio & website details and log audit metrics."""
+        try:
+            logger.info("Executing scheduled daily memory refresh from Devfolio & website...")
+            updated, _ = live_sync.sync(force=True)
+            db.set_metric("daily_sync_status", {
+                "timestamp": time.time(),
+                "status": "success",
+                "updated": updated,
+            })
+            logger.info("Scheduled daily memory sync completed (Updated: %s).", updated)
+        except Exception as e:
+            logger.error("Error in scheduled daily memory sync: %s", e)
 
     @bot.event
     async def on_resumed() -> None:

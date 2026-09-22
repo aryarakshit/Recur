@@ -287,21 +287,28 @@ class GroqProvider(LLMProvider):
             models_to_try.append("openai/gpt-oss-20b")
 
         for model_name in models_to_try:
-            try:
-                response = await self.client.chat.completions.create(
-                    model=model_name,
-                    messages=[
-                        {"role": "system", "content": system_instruction},
-                        {"role": "user", "content": user_content},
-                    ],
-                    temperature=0.2,
-                    max_tokens=900,
-                )
-                content = (response.choices[0].message.content or "").strip()
-                if content:
-                    return content
-            except Exception as e:
-                logger.warning("Groq model '%s' error: %s. Trying backup if available.", model_name, e)
+            for attempt in range(2):
+                try:
+                    response = await self.client.chat.completions.create(
+                        model=model_name,
+                        messages=[
+                            {"role": "system", "content": system_instruction},
+                            {"role": "user", "content": user_content},
+                        ],
+                        temperature=0.2,
+                        max_tokens=900,
+                    )
+                    content = (response.choices[0].message.content or "").strip()
+                    if content:
+                        return content
+                except Exception as e:
+                    err_str = str(e).lower()
+                    if "429" in err_str or "rate limit" in err_str or "too many requests" in err_str:
+                        logger.warning("Groq rate limit on model '%s' (attempt %d): %s. Backing off 1.5s...", model_name, attempt + 1, e)
+                        await asyncio.sleep(1.5)
+                    else:
+                        logger.warning("Groq model '%s' error: %s. Trying backup if available.", model_name, e)
+                        break
 
         # Grounded fallback directly from context if LLM API rate limits
         lines = [line.strip() for line in context.splitlines() if line.strip() and not line.startswith("[Source") and not line.startswith("Document:")]

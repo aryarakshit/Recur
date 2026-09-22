@@ -6,6 +6,7 @@ fallback policy whenever the official knowledge base lacks the requested informa
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Any, TYPE_CHECKING
@@ -93,6 +94,7 @@ class AnswerGenerator:
         self.default_organizer_channel = default_organizer_channel
         self.classifier = classifier
         self.live_sync = live_sync
+        self._semaphore = asyncio.Semaphore(8)
 
     async def generate_answer(
         self,
@@ -188,15 +190,16 @@ class AnswerGenerator:
 
         formatted_context = "\n\n---\n\n".join(context_parts)
 
-        # 2. Call LLM provider
+        # 2. Call LLM provider with concurrency semaphore (max 8 parallel LLM calls)
         try:
-            answer = await self.llm_provider.answer(
-                question=question,
-                context=formatted_context,
-                history=history,
-                organizer_channel=channel,
-                organizer_tag=organizer_tag,
-            )
+            async with self._semaphore:
+                answer = await self.llm_provider.answer(
+                    question=question,
+                    context=formatted_context,
+                    history=history,
+                    organizer_channel=channel,
+                    organizer_tag=organizer_tag,
+                )
 
             # Clean cognitive reasoning from answer and log thought process
             answer, _ = clean_cognitive_response(answer, question=question)

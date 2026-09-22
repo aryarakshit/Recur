@@ -229,3 +229,25 @@ async def test_peer_conversation_replies_when_bot_mentioned(classifier):
     assert "mentioned" in reason.lower()
 
 
+@pytest.mark.asyncio
+async def test_devfolio_team_formation_question_not_misclassified_as_teammate_search(classifier):
+    tamim_msg = (
+        "Hello, I wanted to clarify something regarding the team formation process on Devfolio. "
+        "Does every team member have to join/register individually for the hackathon?\n\n"
+        "If yes, could you please guide me on how I can add or invite my existing team members to join my team on Devfolio? "
+        "I have already created the team, but I'm not sure how the other members can join it."
+    )
+    # Must NOT be classified as peer teammate search/recruitment
+    assert classifier.is_teammate_search(tamim_msg) is False
+
+    # Ambient reply check: must answer this legitimate hackathon platform question
+    should_reply, reason = await classifier.should_reply(
+        content=tamim_msg,
+        is_bot_mentioned=False,
+        is_reply_to_bot=False,
+    )
+    assert should_reply is True
+    assert "hackathon" in reason.lower() or "query" in reason.lower()
+
+
+

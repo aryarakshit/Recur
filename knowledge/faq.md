@@ -19,6 +19,14 @@ Applying for Recursive is done via Devfolio with an idea review round:
 4. **Export as PDF & Upload**: Remove the final Guidelines slide, save your completed deck as a PDF (maximum 8 slides total including cover slide), and upload it directly in your Devfolio application form before registration closes.
 5. **Review & RSVP**: Applications will be reviewed by the organizing committee. Shortlisted teams will receive an acceptance invitation on Devfolio and email to confirm their attendance (RSVP) for the in-person hackathon at GNIT.
 
+## 4b. How does team formation and registration work on Devfolio? Does every team member have to register individually?
+Yes, every team member must register individually on Devfolio. Follow these exact steps:
+1. **Team Leader Registers First**: The team leader registers and applies first on Devfolio (`https://recursiveacm.devfolio.co`), creates the team, and names it.
+2. **Generate Team Code**: Once the team is created, Devfolio provides the team leader with a unique **Team Code** (and invite link) on their dashboard.
+3. **Teammates Register Individually**: Each team member creates or logs into their own Devfolio account and applies for Recursive 2026.
+4. **Enter Team Code**: During registration, instead of selecting 'Solo Participation', each member must choose **'Team Participation'** and enter the Team Code shared by the team leader.
+5. **Team Complete**: This automatically adds them to the existing team on Devfolio (teams must consist of 2 to 4 members; solo participation is not permitted).
+
 ## 5. What should be included in our Idea Submission PPT?
 Your presentation must strictly follow the official 8-slide structure from the template (maximum 8 slides, including the cover slide):
 - **Slide 1 — Cover Slide**: Official Shift-8 Recursive Hackathon branding with GNIT & ACM chapter headers.

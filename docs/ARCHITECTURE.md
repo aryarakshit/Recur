@@ -118,7 +118,11 @@ flowchart TD
   - **Dense Vector Search**: FAISS index built on 16 official hackathon documents spanning rules, schedules, venue details, submission criteria, FAQs, and prize tracks.
   - **Lexical Keyword Overlap**: Content keyword matching with English stop-word filtering prevents generic documents (like `chair.md`) from dominating short queries.
   - **Dynamic Organizer Memory Priority**: All entries in `knowledge/memory_updates.md` are evaluated across a 25-candidate window and given an organizer priority boost (`+0.35`) when query keywords match live organizer directives.
-- **`LiveWebSync` (Periodic Scraper)**: **Runs every 15 minutes (900s) as a daemon thread**, scraping `https://recursiveacm.devfolio.co/` (API + schedule page) and `https://recursiveacm.in`, automatically updating `knowledge/live_updates.md` and triggering incremental FAISS re-indexing. Rate-limited to max 1 fetch per 60s unless forced via `/sync` command.
+- **`LiveWebSync` (Continuous Polling & Daily Maintenance)**:
+  - **15-Minute Continuous Polling**: Runs every 15 minutes (900s) as a daemon thread, scraping `https://recursiveacm.devfolio.co/` (API + schedule page) and `https://recursiveacm.in`.
+  - **Data-Payload Hashing**: Compares raw extracted JSON/data hash (excluding dynamic clock timestamps) so FAISS re-indexing only triggers when actual deadlines, announcements, or status change.
+  - **Daily 24-Hour Maintenance Checkpoint**: A dedicated Discord `@tasks.loop(hours=24)` (`daily_memory_sync`) runs an audit sync, forces full freshness verification, and logs results to SQLite `system_metrics` (`daily_sync_status`).
+  - **Rate Limiting**: Enforces minimum 60s cooldown between web requests unless forced via `/sync` command or daily maintenance.
 - **Dynamic Memory Ingestion & Removal (`#recur-mem-update`)**:
   - **Memory Ingestion Triggers** (4 patterns):
     1. `@recur add this info in your memory .. <info>`
@@ -140,18 +144,18 @@ flowchart TD
 - **Active Production Models**:
   - **Primary Engine**: `qwen/qwen3.8-27b` (Qwen 27B on Groq LPU with ~2s sub-second inference).
   - **Automated Failover Engine**: `openai/gpt-oss-20b` (instant backup if primary encounters rate limit).
-  - **Token Calibration**: `max_tokens = 700` (calibrated strictly below Groq's 1000 OTPM ceiling to prevent HTTP 429 rate limit rejections).
+  - **Token Calibration**: `max_tokens = 900` (expanded ceiling allowing complete, un-truncated markdown responses while preserving concise internal cognitive thoughts).
 - **Reasoning Steps**:
   - **`[READ]`**: Ingests the query, recent conversation history, retrieved knowledge base chunks, and live Devfolio updates with attention to emotional tone.
-  - **`[UNDERSTAND]`**: Identifies participant anxiety (e.g. deadline panic, submission cutoff confusion, PPT slide limits, working prototype vs idea phase).
-  - **`[THINK & DELIBERATE]`**: Synthesizes official judging criteria (*Innovation 25%, Technical Complexity 25%, Working Prototype 25%, UI/UX 15%, Pitch 10%*), Devfolio submission buffers, and pragmatic mentor advice.
+  - **`[UNDERSTAND]`**: Identifies participant anxiety (e.g. deadline panic, submission cutoff confusion, PPT slide limits, working prototype vs idea phase, Devfolio team formation).
+  - **`[THINK & DELIBERATE]`**: Synthesizes official judging criteria (*Innovation 25%, Technical Complexity 25%, Working Prototype 25%, UI/UX 15%, Pitch 10%*), Devfolio submission buffers, and pragmatic mentor advice in `< 40 words`.
   - **`[REPLY]`**: Formulates an empathetic, encouraging, high-IQ Discord reply.
 - **`clean_cognitive_response()` & Tone Filter**:
   - Extracts and logs internal reasoning process to server logs while serving clean presentation markdown to Discord.
   - **Greeting Moderation**: Automatically strips boilerplate `"Hi there!"` / `"Hey there! 👋"` when the participant asked a direct question without greeting, diving straight into the core answer. Greetings are only preserved if the participant explicitly greeted first.
 
 ### Layer 6: Action & Persistence Layer
-- **`Database` (SQLite with WAL mode)**: Logs queries, latency, token usage, unanswered questions, and system metrics. Configured with `PRAGMA journal_mode = WAL`, `PRAGMA synchronous = NORMAL`, `PRAGMA busy_timeout = 30000` for high-concurrency reads/writes.
+- **`Database` (SQLite with WAL mode & Thread Safety)**: Logs queries, latency, token usage, unanswered questions, and system metrics. Configured with `PRAGMA journal_mode = WAL`, `PRAGMA synchronous = NORMAL`, `PRAGMA busy_timeout = 30000`, `timeout = 30.0s`, and `threading.RLock()` serialization across all write transactions.
 - **`ConversationMemory`**: Sliding-window context store (up to 6 turns per user/channel) supporting natural multi-turn conversations.
 
 ---
@@ -167,26 +171,26 @@ flowchart TD
 | **Hugging Face Spaces** | `Dockerfile` with `EXPOSE 7860` | ✅ Platform-level | HTTP 200 on :7860 |
 
 ### Concurrency & Heavy Demand Handling
-- **SQLite WAL Mode**: `journal_mode=WAL` allows concurrent readers + single writer without locking bottlenecks. `busy_timeout=30000` prevents "database is locked" under burst load.
+- **SQLite WAL Mode & Thread Locks**: `journal_mode=WAL` allows concurrent readers + single writer without locking bottlenecks. `busy_timeout=30000` + reentrant `self._lock` serialization prevents "database is locked" errors during simultaneous database write bursts.
+- **LLM Concurrency Queueing (`asyncio.Semaphore(8)`)**: Under heavy message surges (e.g. 50+ participants messaging simultaneously), the bot queues LLM generation calls to a max of 8 parallel requests, preventing API rate-limit spikes while servicing all users sequentially in seconds.
+- **Groq 429 Exponential Backoff**: Automatic retry loop with a 1.5s backoff if Groq returns HTTP 429 or transient 503; smooth fallback to grounded context extraction if all attempts fail so no query is ever lost.
+- **Per-User Burst Anti-Spam Throttle**: 1.5-second query throttle per user prevents raid/burst attacks from overwhelming Discord channels or consuming API quotas.
+- **24/7 Memory Leak Prevention**: Background in-memory caches (`_user_last_query`, `_member_cache`, `last_team_ping`) are automatically pruned every 5 minutes, maintaining flat memory usage indefinitely.
 - **Discord Gateway Resilience**: 
   - `reconnect=True` in `bot.run()` enables automatic WebSocket reconnection.
   - Application-level exponential backoff (5s → 10s → 20s → 40s → 60s cap) for `GatewayNotFound`, `ConnectionClosed`, and generic exceptions.
   - `on_disconnect` / `on_resumed` logging for observability.
-- **Rate Limiting & Cooldowns**:
-  - **Live Sync**: Max 1 fetch per 60s (configurable), enforced via `threading.Lock` + timestamp check.
-  - **Teammate Forward**: 60s per-user cooldown prevents `@everyone` ping spam.
-  - **LLM Token Budget**: `max_tokens=700` stays under Groq 1000 OTPM limit; automatic failover to backup model on 429.
-  - **HTTP Timeouts**: 8s for Devfolio/website scrapes, 10s for keep-alive pings, 30s SQLite busy timeout.
-- **Background Daemon Threads** (all `daemon=True`):
-  - LiveWebSync (15 min interval, 30s startup delay)
+- **Background Tasks & Daemons**:
+  - LiveWebSync Daemon (15 min interval, 30s startup delay)
+  - Daily Memory Sync (`@tasks.loop(hours=24)` maintenance checkpoint)
   - Keep-Alive Ping (9 min interval, 3 min startup delay)
-  - Health Check HTTP Server (non-blocking `serve_forever`)
-  - Discord periodic catch-up task (5 min interval via `discord.ext.tasks`)
+  - Health Check HTTP Server (non-blocking `serve_forever` on port 7860)
+  - Discord Periodic Catch-Up Task (5 min interval via `discord.ext.tasks`)
 
 ### Memory & Knowledge Persistence
 - **FAISS Index**: Persisted to `data/faiss.index` + `data/metadata.json` — survives container restarts.
 - **SQLite Database**: `data/hackbot.db` with WAL — survives restarts, tracks all queries, unanswered questions, conversation history, and dynamic memory updates.
-- **Knowledge Files**: 16 static `.md` files in `knowledge/` + `live_updates.md` (auto-updated every 15 min) + `memory_updates.md` (organizer-controlled) — all version-controlled in Git.
+- **Knowledge Files**: 16 static `.md` files in `knowledge/` + `live_updates.md` (auto-updated every 15 min & daily) + `memory_updates.md` (organizer-controlled) — all version-controlled in Git.
 
 ---
 

@@ -63,6 +63,7 @@ class MessageHandler:
         self.indexer = indexer
         self.last_team_ping: dict[int, float] = {}
         self._member_cache: dict[int, tuple[discord.Member, float]] = {}
+        self._user_last_query: dict[int, float] = {}
 
     async def _resolve_member(
         self,
@@ -851,6 +852,30 @@ class MessageHandler:
             return
         if "dyno" in getattr(message.author, "name", "").lower():
             return
+
+        # Check if message is in dedicated memory update channel
+        is_mem_channel = self._is_memory_update_channel(message.channel)
+
+        # Per-user query throttle (1.5s) under heavy demand to prevent burst spam from exhausting API quotas
+        now = time.time()
+        user_id = getattr(message.author, "id", 0)
+        if not is_mem_channel and user_id:
+            last_ts = self._user_last_query.get(user_id, 0.0)
+            if now - last_ts < 1.5:
+                logger.info("Throttling burst query from %s (last query %.2fs ago)", message.author, now - last_ts)
+                return
+            self._user_last_query[user_id] = now
+
+        # Periodic memory cleanup for 24x7 operation
+        if len(self._user_last_query) > 1000:
+            cutoff = now - 300.0
+            self._user_last_query = {uid: ts for uid, ts in self._user_last_query.items() if ts > cutoff}
+        if len(self._member_cache) > 1000:
+            cutoff = now - 300.0
+            self._member_cache = {uid: val for uid, val in self._member_cache.items() if val[1] > cutoff}
+        if len(self.last_team_ping) > 500:
+            cutoff = now - 120.0
+            self.last_team_ping = {uid: ts for uid, ts in self.last_team_ping.items() if ts > cutoff}
 
         # Check if bot is directly mentioned
         is_mentioned = bot_user in message.mentions

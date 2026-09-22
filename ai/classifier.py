@@ -89,8 +89,22 @@ class MessageClassifier:
         """Detects peer-to-peer teammate recruitment, finding teammates, and LFG messages."""
         clean = text.strip().lower()
 
-        # Questions about official rules or limits are NOT teammate searches
-        # e.g. "What is the team size limit?", "Can I participate solo?"
+        # Questions about official rules, team size limits, or Devfolio platform procedures are NOT teammate searches.
+        # e.g. "What is the team size limit?", "Can I participate solo?",
+        # "Hello, I wanted to clarify something regarding the team formation process on Devfolio. Does every team member have to join/register individually?",
+        # "How do team members join using the team code on Devfolio?"
+        has_procedural_keywords = any(term in clean for term in [
+            "limit", "maximum", "minimum", "rule", "rules", "allowed", "allow", "size", "solo",
+            "devfolio", "portal", "website", "process", "code", "team code", "individually",
+            "individual", "invite", "clarify", "formation process", "how to join", "how can i add",
+            "how do other members",
+        ])
+        has_question_indicator = any(q in clean for q in [
+            "?", "what", "can", "is", "are", "how", "where", "does", "could", "clarify", "guide", "wondering", "tell me"
+        ])
+        if has_procedural_keywords and has_question_indicator:
+            return False
+
         if any(clean.startswith(q) for q in ["what", "can", "is", "are", "how", "where"]):
             if any(term in clean for term in ["limit", "maximum", "rule", "rules", "allowed", "allow", "size", "solo", "minimum"]):
                 return False

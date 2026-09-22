@@ -8,7 +8,11 @@ Applications for Recursive are handled through Devfolio with an initial idea rev
 1. **Register on Devfolio**:
    - Apply at the official Devfolio page: [https://recursiveacm.devfolio.co](https://recursiveacm.devfolio.co)
    - Complete your personal profile.
-   - Form a team of 2 to 4 members (minimum 2, maximum 4 builders). Solo participation is not permitted.
+   - **Team Formation Mechanics**:
+     - The **Team Leader** registers first, creates the team on Devfolio, and gets a unique **Team Code**.
+     - The leader shares this **Team Code** with team members.
+     - **Each member must register individually** on Devfolio, select **Team Participation** (instead of Solo), and input the Team Code to join.
+     - Teams must consist of 2 to 4 members (minimum 2, maximum 4 builders). Solo participation is strictly not permitted.
 2. **Download the Official Idea Submission Template**:
    - Access the official [Recursive ACM Idea Submission Template](https://docs.google.com/presentation/d/1Heaa2d_DUVpFmt4Oo2dKZWUOvAVtXQrn1OnsHCBEWEQ/copy) on Google Slides.
 3. **Prepare Your Proposal**:
