@@ -99,6 +99,18 @@ def test_extract_memory_update_in_memory_channel(memory_handler):
     assert memory_handler._extract_memory_update("add to memory: Check-in starts at 9 AM", is_memory_channel=True) == "Check-in starts at 9 AM"
     assert memory_handler._extract_memory_update("auto update memory: Judging at 2 PM", is_memory_channel=True) == "Judging at 2 PM"
     assert memory_handler._extract_memory_update("remember this: Badges required for lunch", is_memory_channel=True) == "Badges required for lunch"
+    assert memory_handler._extract_memory_update("remember: The mentor room is Lab 2", is_memory_channel=True) == "The mentor room is Lab 2"
+    assert memory_handler._extract_memory_update("rmember: The backup Wi-Fi is RecurGuest-5G", is_memory_channel=True) == "The backup Wi-Fi is RecurGuest-5G"
+    assert memory_handler._extract_memory_update("mem update: Registration closes at 8 PM", is_memory_channel=True) == "Registration closes at 8 PM"
+    # Shorthand is reserved for the dedicated memory channel.
+    assert memory_handler._extract_memory_update("mem update: do not store this here", is_memory_channel=False) is None
+
+
+def test_extract_memory_removal_shorthand_in_memory_channel(memory_handler):
+    assert memory_handler._extract_memory_removal("delete mem: old Wi-Fi password", is_memory_channel=True) == "old Wi-Fi password"
+    assert memory_handler._extract_memory_removal("mem delete: outdated venue", is_memory_channel=True) == "outdated venue"
+    assert memory_handler._extract_memory_removal("mem remove: incorrect deadline", is_memory_channel=True) == "incorrect deadline"
+    assert memory_handler._extract_memory_removal("delete mem: do not delete this here", is_memory_channel=False) is None
 
 
 @pytest.mark.asyncio
@@ -338,6 +350,18 @@ def test_extract_chained_trigger_payload(memory_handler):
     assert payload == 'if anyone asked for "Prize pool" say "not yet disclosed".'
 
 
+def test_memory_trigger_must_be_an_explicit_command(memory_handler):
+    # Mentioning the words in quoted or explanatory prose must not mutate memory.
+    assert memory_handler._extract_memory_update(
+        'if anyone types anything rather than telling you "update memory" or "remember", tell them not to do it',
+        is_memory_channel=True,
+    ) is None
+    assert memory_handler._extract_memory_update(
+        'please do not update memory when users are chatting',
+        is_memory_channel=False,
+    ) is None
+
+
 def test_hybrid_retrieval_finds_memory_update(memory_handler):
     """Verifies that 'so recur what is the pricepool?' correctly retrieves the organizer's memory update."""
     from rag.retriever import KnowledgeRetriever
@@ -428,4 +452,3 @@ async def test_handle_memory_removal_action(memory_handler):
     updated_content = kb_file.read_text(encoding="utf-8")
     assert "Prize pool" not in updated_content
     assert "Dinner will be served at 8 PM" in updated_content
-

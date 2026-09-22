@@ -79,6 +79,17 @@ async def test_ignores_casual_chatter(classifier):
 
 
 @pytest.mark.asyncio
+async def test_ignores_group_greetings_and_checkins(classifier):
+    for msg in ["hi there every one how are you", "hello everyone", "how are you doing?"]:
+        should_reply, reason = await classifier.should_reply(
+            content=msg,
+            is_bot_mentioned=False,
+            is_reply_to_bot=False,
+        )
+        assert should_reply is False, f"Erroneously replied to casual check-in: {msg} ({reason})"
+
+
+@pytest.mark.asyncio
 async def test_ignores_chatter_mentioning_other_user(classifier):
     should_reply, _ = await classifier.should_reply(
         content="<@123456789> check this",
@@ -248,6 +259,5 @@ async def test_devfolio_team_formation_question_not_misclassified_as_teammate_se
     )
     assert should_reply is True
     assert "hackathon" in reason.lower() or "query" in reason.lower()
-
 
 

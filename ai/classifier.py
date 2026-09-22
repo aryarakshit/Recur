@@ -61,6 +61,9 @@ NOISE_PATTERNS = [
     r"^<a?:[a-zA-Z0-9_]+:[0-9]+>$",  # Discord custom emoji
     r"^[\U00010000-\U0010ffff\u2600-\u26ff\u2700-\u27bf\s]+$",  # Emoji-only strings
     r"^(ok|okay|k|np|ty|thanks|thank you|welcome|sure|yep|nope|yes|no)\s*(!+|\.+)*$",
+    r"^(?:(?:hi|hello|hey|yo)\s+)?(?:there\s+)?(?:everyone|every\s+one|guys|folks|all)\s*(?:[!,.\s]+(?:how\s+are\s+you|how\s+is\s+everyone|how's\s+everyone|what's\s+up))?\s*[!.?]*$",
+    r"^(?:hi|hello|hey|yo)\s+(?:there\s+)?(?:everyone|every\s+one|guys|folks|all)\s*[!.?]*$",
+    r"^(?:how\s+are\s+you|how\s+are\s+you\s+doing|how's\s+it\s+going|what's\s+up|wassup)\s*[!.?]*$",
 ]
 
 

@@ -431,6 +431,12 @@ class MessageHandler:
             r"^(?:@?recur\s+)?(?:please\s+)?(?:auto\s+)?update\s+memory\s*[:\-–—.]*\s*(.+)$",
             r"^(?:@?recur\s+)?(?:please\s+)?remember\s+this\s*[:\-–—.]*\s*(.+)$",
         ]
+        if is_memory_channel:
+            patterns.extend([
+                r"^(?:@?recur\s+)?(?:please\s+)?mem(?:ory)?\s+update\s*[:\-–—.]*\s*(.+)$",
+                r"^(?:@?recur\s+)?(?:please\s+)?r(?:e)?member\s*[:\-–—.]*\s*(.+)$",
+                r"^(?:@?recur\s+)?(?:please\s+)?remember\s*[:\-–—.]*\s*(.+)$",
+            ])
 
         for pat in patterns:
             m = re.match(pat, clean, re.IGNORECASE | re.DOTALL)
@@ -439,18 +445,9 @@ class MessageHandler:
                 if len(info) >= 3:
                     return info
 
-        # In-line trigger search (e.g. if user pinged bot in the middle or formatted text):
-        trigger_match = re.search(
-            r"(?:add\s+(?:this\s+)?(?:info\s+)?(?:in|to)\s+(?:your\s+)?memory|add\s+to\s+memory|(?:auto\s+)?update\s+memory|remember\s+this)\s*[:\-–—.]*\s*(.+)$",
-            clean,
-            re.IGNORECASE | re.DOTALL,
-        )
-        if trigger_match:
-            info = _clean_payload(trigger_match.group(1))
-            if len(info) >= 3:
-                return info
-
-        # Otherwise normal chat!
+        # Do not search for triggers in the middle of a sentence. Otherwise a
+        # quoted instruction such as "if someone says update memory, ..." can
+        # accidentally become a real memory command.
         return None
 
     async def _handle_memory_update(
@@ -571,9 +568,15 @@ class MessageHandler:
         patterns = [
             r"^(?:@?recur\s+)?(?:please\s+)?remove\s+(?:this\s+)?(?:info|information)?\s*(?:from|in)\s*(?:your\s+)?mem(?:ory)?\s*[:\-–—.]*\s*(.+)$",
             r"^(?:@?recur\s+)?(?:please\s+)?remove\s+(?:from\s+)?mem(?:ory)?\s*[:\-–—.]*\s*(.+)$",
-            r"^(?:@?recur\s+)?(?:please\s+)?delete\s+(?:from\s+)?mem(?:ory)?\s*[:\-–—.]*\s*(.+)$",
+            r"^(?:@?recur\s+)?(?:please\s+)?delete\s+(?:from\s+)?memory\s*[:\-–—.]*\s*(.+)$",
             r"^(?:@?recur\s+)?(?:please\s+)?forget\s+(?:this|about)?\s*[:\-–—.]*\s*(.+)$",
         ]
+        if is_memory_channel:
+            patterns.extend([
+                r"^(?:@?recur\s+)?(?:please\s+)?delete\s+mem(?:ory)?\s*[:\-–—.]*\s*(.+)$",
+                r"^(?:@?recur\s+)?(?:please\s+)?mem(?:ory)?\s+delete\s*[:\-–—.]*\s*(.+)$",
+                r"^(?:@?recur\s+)?(?:please\s+)?mem(?:ory)?\s+remove\s*[:\-–—.]*\s*(.+)$",
+            ])
 
         for pat in patterns:
             m = re.match(pat, clean, re.IGNORECASE | re.DOTALL)
