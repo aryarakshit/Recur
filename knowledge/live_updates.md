@@ -1,6 +1,6 @@
 # Live Web Updates from Devfolio & Official Website
 *Source: https://recursiveacm.devfolio.co and https://recursiveacm.in*
-*Last Live Synced: 2026-09-20 18:22 UTC*
+*Last Live Synced: 2026-09-22 18:42 UTC*
 
 ## Devfolio Registration, Deadlines & Timeline
 - **Event**: Recursive

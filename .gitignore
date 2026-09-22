@@ -16,6 +16,8 @@ __pycache__/
 # Data and Indices
 data/*.index
 data/*.db
+data/*.db-wal
+data/*.db-shm
 data/*.sqlite3
 data/metadata.json
 data/*.log
