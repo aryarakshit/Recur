@@ -7,7 +7,7 @@ import os
 import sys
 import threading
 import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import discord
 from discord.ext import commands, tasks
 
@@ -34,18 +34,27 @@ logger = logging.getLogger("Recur")
 
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
-    """Minimal HTTP handler to satisfy Hugging Face Spaces & Render health checks."""
+    """Multi-threaded HTTP handler to satisfy external monitors & Render health checks."""
 
     def do_HEAD(self) -> None:
+        body = b"Recur Bot is running and healthy!\n"
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
         self.end_headers()
 
     def do_GET(self) -> None:
+        body = b"Recur Bot is running and healthy!\n"
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
         self.end_headers()
-        self.wfile.write(b"Recur Bot is running and healthy!\n")
+        try:
+            self.wfile.write(body)
+        except Exception:
+            pass
 
     def log_message(self, format: str, *args: object) -> None:
         pass
@@ -54,7 +63,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
 def start_health_server() -> None:
     port = int(os.getenv("PORT", "7860"))
     try:
-        server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+        server = ThreadingHTTPServer(("0.0.0.0", port), HealthCheckHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         logger.info("Health check server listening on 0.0.0.0:%d", port)
@@ -274,23 +283,23 @@ def main() -> None:
         except Exception as e:
             logger.error("Error processing message '%s': %s", getattr(message, "content", ""), e, exc_info=True)
 
-    # Automatic reconnection loop
-    retry_delay = 5
-    while True:
-        try:
-            bot.run(config.discord_token, reconnect=True)
-            break
-        except discord.errors.LoginFailure:
-            logger.critical("Fatal: Invalid DISCORD_TOKEN provided. Please check environment variables.")
-            sys.exit(1)
-        except (discord.errors.GatewayNotFound, discord.errors.ConnectionClosed) as e:
-            logger.warning("Discord connection error: %s. Reconnecting in %ds...", e, retry_delay)
-            time.sleep(retry_delay)
-            retry_delay = min(retry_delay * 2, 60)
-        except Exception as e:
-            logger.error("Unexpected error in Discord bot runner: %s. Retrying in %ds...", e, retry_delay)
-            time.sleep(retry_delay)
-            retry_delay = min(retry_delay * 2, 60)
+    # Run the bot with built-in reconnection
+    try:
+        bot.run(config.discord_token, reconnect=True)
+    except discord.errors.LoginFailure:
+        logger.critical("Fatal: Invalid DISCORD_TOKEN provided. Please check environment variables.")
+        sys.exit(1)
+    except Exception as e:
+        logger.error("Unexpected error in Discord bot runner: %s", e)
+
+    # If bot.run ever terminates unexpectedly on Render, auto-re-exec process to stay online 24/7
+    logger.warning("Bot runner terminated unexpectedly. Automatically re-executing process in 5s...")
+    time.sleep(5)
+    try:
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+    except Exception as e:
+        logger.error("Failed to re-exec process: %s", e)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
