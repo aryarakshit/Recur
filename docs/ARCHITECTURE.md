@@ -142,8 +142,8 @@ flowchart TD
 
 ### Layer 5: 4-Step Cognitive Architecture
 - **Active Production Models**:
-  - **Primary Engine**: `gemini-3.8-flash` (Google Gemini with modern `google-genai` SDK), with `qwen/qwen3.8-27b` on Groq as fallback.
-  - **Automated Failover Engine**: `gemini-3.1-flash-lite` (instant backup if Google Gemini encounters 503 high-demand spikes) and Groq fallback.
+  - **Primary Engine**: `qwen/qwen3.8-27b` on Groq.
+  - **Gemini Status**: Configured but silent/disabled until explicitly re-enabled.
   - **Token Calibration**: `max_output_tokens = 1200` (expanded ceiling allowing complete, un-truncated markdown responses while preserving concise internal cognitive thoughts).
 - **Reasoning Steps**:
   - **`[READ]`**: Ingests the query, recent conversation history, retrieved knowledge base chunks, and live Devfolio updates with attention to emotional tone.
@@ -314,12 +314,12 @@ All configuration is centralized in `config.py` with `.env` overrides. Key varia
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | `DISCORD_TOKEN` | *(required)* | Bot token from Discord Developer Portal |
-| `LLM_PROVIDER` | `gemini` | `groq` or `gemini` (auto-detected from API keys) |
-| `GROQ_API_KEY` | — | Groq API key for the Qwen fallback (`qwen/qwen3.8-27b`) |
-| `GEMINI_API_KEY` | — | Google Gemini API key for the primary model |
-| `LLM_MODEL` | `gemini-3.8-flash` | Primary model override |
-| `FALLBACK_PROVIDER` | `groq` | Provider used when the primary fails |
-| `FALLBACK_MODEL` | `qwen/qwen3.8-27b` | Fallback model override |
+| `LLM_PROVIDER` | `groq` | Primary provider (`groq` or `gemini`) |
+| `GROQ_API_KEY` | — | Groq API key for the primary Qwen model |
+| `GEMINI_API_KEY` | — | Gemini API key, currently unused |
+| `LLM_MODEL` | `qwen/qwen3.8-27b` | Primary model override |
+| `FALLBACK_PROVIDER` | — | Empty while Gemini fallback is disabled |
+| `FALLBACK_MODEL` | `gemini-3.8-flash` | Reserved fallback model |
 | `EMBEDDING_MODEL` | `text-embedding-004` | Embedding model for FAISS indexing |
 | `ALLOWED_CHANNELS` | `general,ask-mentors,...` | Comma-separated channel names for ambient replies |
 | `ALLOWED_ROLES` | `hacker,hackers,participant,...` | Roles permitted to receive ambient answers |
