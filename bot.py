@@ -357,14 +357,28 @@ def main() -> None:
         logger.critical("Fatal: Invalid DISCORD_TOKEN provided. Please check environment variables: %s", e)
         time.sleep(30)
         sys.exit(1)
+    except discord.errors.HTTPException as e:
+        _app_state["last_error"] = f"HTTPException {getattr(e, 'status', 'unknown')}: {e}"
+        _app_state["status"] = "rate_limited" if getattr(e, "status", None) == 429 else "http_error"
+        logger.error("Discord HTTP Exception: %s", e)
+        if getattr(e, "status", None) == 429:
+            retry_after = getattr(e, "retry_after", None)
+            delay = max(int(retry_after), 300) if retry_after else 300
+            logger.warning(
+                "Discord Cloudflare Rate Limit (HTTP 429, code 0). Backing off for %ds (5m) to let IP block expire...",
+                delay,
+            )
+            time.sleep(delay)
+        else:
+            time.sleep(15)
     except Exception as e:
         _app_state["last_error"] = f"{type(e).__name__}: {e}"
         _app_state["status"] = "error"
         logger.error("Unexpected error in Discord bot runner: %s", e)
+        time.sleep(15)
 
-    # If bot.run ever terminates unexpectedly on Render, auto-re-exec process to stay online 24/7
-    logger.warning("Bot runner terminated unexpectedly. Automatically re-executing process in 5s...")
-    time.sleep(5)
+    # Re-exec process after backoff to reconnect cleanly
+    logger.warning("Bot runner stopped. Re-executing process now...")
     try:
         os.execv(sys.executable, [sys.executable] + sys.argv)
     except Exception as e:
