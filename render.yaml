@@ -5,6 +5,7 @@ services:
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
+    healthCheckPath: /
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
@@ -23,7 +24,7 @@ services:
       - key: MAINTAINER_ROLE_ID
         sync: false
       - key: ALLOWED_CHANNELS
-        value: "general,ask-mentors"
+        value: "general,ask-mentors,ask-mentor,help,recur-mem-update,chat,general-chat,discussion,lounge,welcome,introductions"
       - key: ALLOWED_ROLES
         value: "hacker,hackers,participant,participants"
       - key: EXCLUDED_ROLES
