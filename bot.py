@@ -24,11 +24,40 @@ from rag.live_sync import LiveWebSync
 from storage.database import Database
 from storage.memory import ConversationMemory
 
+import collections
+import json
+import re
+
+# In-memory log buffer for cloud telemetry and diagnostics
+_log_buffer: collections.deque[str] = collections.deque(maxlen=100)
+_app_state: dict[str, object] = {
+    "status": "initializing",
+    "start_time": time.time(),
+    "bot": None,
+    "last_error": None,
+}
+
+
+class BufferLogHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            msg = re.sub(r"MTU[a-zA-Z0-9_\-\.]+", "[MASKED_TOKEN]", msg)
+            msg = re.sub(r"gsk_[a-zA-Z0-9]+", "[MASKED_GROQ]", msg)
+            msg = re.sub(r"AIza[a-zA-Z0-9_\-]+", "[MASKED_GEMINI]", msg)
+            _log_buffer.append(msg)
+        except Exception:
+            pass
+
+
+buffer_handler = BufferLogHandler()
+buffer_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
+    handlers=[logging.StreamHandler(sys.stdout), buffer_handler],
 )
 logger = logging.getLogger("Recur")
 
@@ -45,6 +74,40 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:
+        if self.path in ("/status", "/healthz", "/debug", "/logs", "/json"):
+            bot_inst = _app_state.get("bot")
+            is_ready = bool(bot_inst and getattr(bot_inst, "is_ready", lambda: False)())
+            bot_user = str(getattr(bot_inst, "user", None)) if bot_inst else None
+            guild_list = (
+                [f"{g.name} (ID: {g.id})" for g in getattr(bot_inst, "guilds", [])]
+                if bot_inst and getattr(bot_inst, "guilds", None)
+                else []
+            )
+            data = {
+                "service_status": _app_state.get("status", "unknown"),
+                "bot_ready": is_ready,
+                "bot_user": bot_user,
+                "guilds": guild_list,
+                "uptime_seconds": int(time.time() - _app_state.get("start_time", time.time())),
+                "has_discord_token": config.has_discord_token,
+                "token_prefix": (config.discord_token[:6] + "...") if config.discord_token else None,
+                "llm_provider": config.llm_provider,
+                "allowed_channels": config.allowed_channel_names,
+                "last_error": str(_app_state.get("last_error")) if _app_state.get("last_error") else None,
+                "recent_logs": list(_log_buffer)[-50:],
+            }
+            body = json.dumps(data, indent=2).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except Exception:
+                pass
+            return
+
         body = b"Recur Bot is running and healthy!\n"
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -186,6 +249,7 @@ def main() -> None:
     allowed_mentions = discord.AllowedMentions(everyone=True, users=True, roles=True, replied_user=True)
 
     bot = commands.Bot(command_prefix="!", intents=intents, allowed_mentions=allowed_mentions)
+    _app_state["bot"] = bot
 
     # Setup slash commands
     setup_commands(
@@ -200,6 +264,7 @@ def main() -> None:
 
     @bot.event
     async def on_ready() -> None:
+        _app_state["status"] = "online"
         logger.info("Recur is online.")
         logger.info("Logged in as %s (ID: %s)", bot.user.name, bot.user.id)
         guilds = [f"'{g.name}' (ID: {g.id}, Members: {g.member_count})" for g in bot.guilds]
@@ -286,10 +351,15 @@ def main() -> None:
     # Run the bot with built-in reconnection
     try:
         bot.run(config.discord_token, reconnect=True)
-    except discord.errors.LoginFailure:
-        logger.critical("Fatal: Invalid DISCORD_TOKEN provided. Please check environment variables.")
+    except discord.errors.LoginFailure as e:
+        _app_state["last_error"] = f"LoginFailure: {e}"
+        _app_state["status"] = "login_failure"
+        logger.critical("Fatal: Invalid DISCORD_TOKEN provided. Please check environment variables: %s", e)
+        time.sleep(30)
         sys.exit(1)
     except Exception as e:
+        _app_state["last_error"] = f"{type(e).__name__}: {e}"
+        _app_state["status"] = "error"
         logger.error("Unexpected error in Discord bot runner: %s", e)
 
     # If bot.run ever terminates unexpectedly on Render, auto-re-exec process to stay online 24/7
