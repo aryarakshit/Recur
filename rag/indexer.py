@@ -17,6 +17,7 @@ import faiss
 import numpy as np
 
 from rag.models import DocumentChunk
+from storage.memory_store import MEMORY_FILE_NAME
 
 if TYPE_CHECKING:
     from ai.embeddings import EmbeddingProvider
@@ -150,7 +151,9 @@ class KnowledgeIndexer:
     def build_index(self) -> dict[str, int | str | float]:
         """Indexes all markdown and PDF files in knowledge directory and writes index + metadata."""
         start_time = time.time()
-        md_files = sorted(list(self.knowledge_dir.glob("*.md")))
+        # Organizer memory is injected into every prompt directly (see MemoryStore),
+        # so it is kept out of similarity search.
+        md_files = sorted(p for p in self.knowledge_dir.glob("*.md") if p.name != MEMORY_FILE_NAME)
         pdf_files = sorted(list(self.knowledge_dir.glob("*.pdf")))
         all_files = sorted(md_files + pdf_files)
 

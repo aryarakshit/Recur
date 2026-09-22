@@ -116,3 +116,36 @@ async def test_generator_attaches_live_context_on_deadline_query(tmp_path):
     mock_live_sync.get_live_context.assert_called()
     call_kwargs = mock_provider.answer.call_args.kwargs
     assert "Live Status from Devfolio" in call_kwargs["context"]
+
+
+def test_sync_ignores_timestamp_only_changes(tmp_path):
+    """Only real Devfolio/website changes rewrite live_updates.md and rebuild the index."""
+    knowledge_dir = tmp_path / "knowledge"
+    knowledge_dir.mkdir()
+    mock_indexer = MagicMock()
+    syncer = LiveWebSync(knowledge_dir=knowledge_dir, indexer=mock_indexer, retriever=MagicMock())
+
+    devfolio = {
+        "name": "Recursive",
+        "url": "https://recursiveacm.devfolio.co",
+        "schedule_url": "https://recursiveacm.devfolio.co/schedule",
+        "status": "Active",
+        "team_size": "2–4 members",
+        "timeline": ["23 Sep 2026 (Wed) Registrations end"],
+        "announcements": [],
+    }
+    website = {"url": "https://recursiveacm.in", "venue": "GNIT Kolkata", "tracks": ["AI"], "announcements": []}
+
+    with patch.object(syncer, "fetch_devfolio", return_value=devfolio), \
+         patch.object(syncer, "fetch_website", return_value=website), \
+         patch("rag.live_sync.datetime") as fake_dt:
+        fake_dt.timezone = __import__("datetime").timezone
+        fake_dt.datetime.now.return_value.strftime.return_value = "2026-09-23 10:00 UTC"
+        assert syncer.sync(force=True)[0] is True
+        fake_dt.datetime.now.return_value.strftime.return_value = "2026-09-23 10:15 UTC"
+        assert syncer.sync(force=True)[0] is False
+        assert mock_indexer.build_index.call_count == 1
+
+        devfolio["timeline"] = ["30 Sep 2026 (Wed) Registrations end"]
+        assert syncer.sync(force=True)[0] is True
+        assert mock_indexer.build_index.call_count == 2

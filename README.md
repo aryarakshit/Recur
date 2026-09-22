@@ -32,6 +32,18 @@ The bot acts as an official, hallucination-free hackathon assistant that reads m
   - Offline Mock Mode: Runs locally when keys are blank.
 - **Vector Search (FAISS)**: Fast, normalized cosine similarity retrieval over chunked documents with calibrated similarity filtering. Supports both Markdown and PDF documents.
 - **Lightweight Sliding Memory**: Retains the last 6 conversation turns per user/channel in SQLite so follow-up inquiries maintain context without polluting authoritative answers.
+- **Where Recur Answers**: Only `#general`, `#ask-mentors` and `#recur-mem-update`. It stays silent everywhere else (including DMs and `@Recur` mentions in other channels). Answers are short and direct, and questions about dates, deadlines, registration, prizes or results re-check Devfolio and <https://recursiveacm.in> first.
+- **Organizer Memory (`#recur-mem-update`)**: Teach Recur by typing in the memory channel. Every saved memory is used in every answer until it's deleted:
+
+  | Type | Does |
+  |---|---|
+  | `remember <note>` / `update memory <note>` / `update mem <note>` | Save a fact or instruction, e.g. `remember if anyone asks about the prize pool, say it's not disclosed yet` |
+  | reply `remember this` to a message | Save that message |
+  | `list mem` | Show saved memories with their `#` IDs |
+  | `delete mem #3` / `delete mem prize pool` | Delete by ID or keywords |
+  | reply `delete this mem` to a "Saved as memory #N" card | Delete that memory |
+
+  Commands must start the message. Participants can't change memory from `#general` or `#ask-mentors`.
 - **Organizer Slash Commands**:
   - `/status` — View bot uptime, active LLM provider, chunk count, and database stats.
   - `/reloadkb` — Re-parse and re-index `knowledge/` dynamically without restarting the bot.
@@ -73,7 +85,8 @@ Recur/
 │
 ├── storage/                   # Unified persistence & memory package
 │   ├── database.py            # SQLite engine (unanswered queries, metrics, logs)
-│   └── memory.py              # Sliding-window conversation history manager
+│   ├── memory.py              # Sliding-window conversation history manager
+│   └── memory_store.py        # Organizer memory from #recur-mem-update
 │
 ├── rag/                       # RAG indexing, live web sync & retrieval
 │   ├── indexer.py             # Markdown + PDF chunker & FAISS builder

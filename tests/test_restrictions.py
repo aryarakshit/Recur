@@ -147,89 +147,74 @@ def test_author_allowed(message_handler):
     assert allowed is True
 
 
-def test_team_finding_channel(message_handler):
+def test_team_finding_channel_lookup(message_handler):
+    """Teammate requests from #general are forwarded to whichever channel is the team-finding one."""
     for name in ["find-your-team!", "find-your-team", "#find-your-team!", "🤝-find-your-team!"]:
         ch = MagicMock()
         ch.name = name
-        ch.parent = None
-        assert message_handler._is_team_finding_channel(ch) is True, f"Channel {name} should be recognized"
+        guild = MagicMock()
+        guild.text_channels = [MagicMock(name="general-mock"), ch]
+        guild.text_channels[0].name = "general"
+        assert message_handler._get_team_finding_channel(guild) is ch, f"Channel {name} should be recognized"
 
+    guild = MagicMock()
+    guild.text_channels = []
     for name in ["general", "ask-mentors", "announcements", "help"]:
         ch = MagicMock()
         ch.name = name
-        ch.parent = None
-        assert message_handler._is_team_finding_channel(ch) is False
+        guild.text_channels.append(ch)
+    assert message_handler._get_team_finding_channel(guild) is None
 
 
 @pytest.mark.asyncio
-async def test_team_finding_handler_replies_everyone():
+async def test_bot_stays_silent_in_team_finding_channel():
+    """Recur only answers in #general, #ask-mentors and #recur-mem-update, so even
+    teammate posts inside #find-your-team get no reply (live or during catch-up)."""
     from unittest.mock import AsyncMock
     from ai.classifier import MessageClassifier
     from ai.provider import MockProvider
 
-    cfg = Config()
-    classifier = MessageClassifier(MockProvider())
     handler = MessageHandler(
-        classifier=classifier,
+        classifier=MessageClassifier(MockProvider()),
         generator=MagicMock(),
         retriever=MagicMock(),
         memory=MagicMock(),
         database=MagicMock(),
-        config=cfg,
+        config=Config(),
     )
-
     bot_user = MagicMock()
     bot_user.id = 999999
 
     ch = MagicMock()
     ch.name = "find-your-team!"
     ch.parent = None
+    ch.send = AsyncMock()
 
-    # 1. Looking for members message -> Should reply tagging @everyone
     msg = MagicMock()
+    msg.id = 4242
     msg.channel = ch
     msg.author = MagicMock()
     msg.author.id = 12345
     msg.author.bot = False
+    msg.author.name = "hacker"
     msg.content = "Looking for 2 members for our team. Frontend React, Backend Python. DM me!"
     msg.mentions = []
     msg.reference = None
     msg.reply = AsyncMock()
 
-    handled = await handler._handle_team_finding_message(msg, bot_user)
-    assert handled is True
-    msg.reply.assert_called_once()
-    call_args, call_kwargs = msg.reply.call_args
-    assert "@everyone" in call_args[0]
-    assert call_kwargs.get("allowed_mentions").everyone is True
+    await handler.handle_message(msg, bot_user)
+    msg.reply.assert_not_called()
 
-    # 2. Duplicate immediate message from same user -> Cooldown active, no second reply
-    msg2 = MagicMock()
-    msg2.channel = ch
-    msg2.author = msg.author
-    msg2.content = "Need 1 more teammate"
-    msg2.mentions = []
-    msg2.reference = None
-    msg2.reply = AsyncMock()
+    async def history(limit=20):
+        yield msg
 
-    handled2 = await handler._handle_team_finding_message(msg2, bot_user)
-    assert handled2 is True
-    msg2.reply.assert_not_called()
-
-    # 3. Chatter in team channel -> Ignored, no reply
-    msg3 = MagicMock()
-    msg3.channel = ch
-    msg3.author = MagicMock()
-    msg3.author.id = 999
-    msg3.author.bot = False
-    msg3.content = "lol cool"
-    msg3.mentions = []
-    msg3.reference = None
-    msg3.reply = AsyncMock()
-
-    handled3 = await handler._handle_team_finding_message(msg3, bot_user)
-    assert handled3 is True
-    msg3.reply.assert_not_called()
+    ch.history = history
+    guild = MagicMock()
+    guild.text_channels = [ch]
+    count = await handler.catch_up_unanswered_messages(bot_user, [guild], limit_per_channel=20)
+    assert count == 0
+    msg.reply.assert_not_called()
+    ch.send.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -307,54 +292,6 @@ async def test_forward_team_finding_message_from_general():
     reply_args, _ = msg.reply.call_args
     assert "<#2222>" in reply_args[0] or "find-your-team" in reply_args[0]
     assert "<@55555>" in reply_args[0]
-
-
-@pytest.mark.asyncio
-async def test_finding_teamates_in_team_finding_channel():
-    from unittest.mock import AsyncMock
-    from ai.classifier import MessageClassifier
-    from ai.provider import MockProvider
-
-    cfg = Config()
-    classifier = MessageClassifier(MockProvider())
-    handler = MessageHandler(
-        classifier=classifier,
-        generator=MagicMock(),
-        retriever=MagicMock(),
-        memory=MagicMock(),
-        database=MagicMock(),
-        config=cfg,
-    )
-
-    bot_user = MagicMock()
-    bot_user.id = 999999
-
-    ch = MagicMock()
-    ch.name = "find-your-team!"
-    ch.parent = None
-
-    author = MagicMock()
-    author.name = "Aniruddh"
-    author.id = 77777
-    author.bot = False
-    author.mention = "<@77777>"
-    author.roles = [MagicMock(name="@everyone")]
-    author.guild_permissions.administrator = False
-
-    msg = MagicMock()
-    msg.channel = ch
-    msg.author = author
-    msg.content = "I am finding teamates"
-    msg.mentions = []
-    msg.reference = None
-    msg.reply = AsyncMock()
-
-    handled = await handler._handle_team_finding_message(msg, bot_user)
-    assert handled is True
-    msg.reply.assert_called_once()
-    call_args, call_kwargs = msg.reply.call_args
-    assert "@everyone" in call_args[0]
-    assert call_kwargs.get("allowed_mentions").everyone is True
 
 
 @pytest.mark.asyncio

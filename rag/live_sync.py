@@ -71,10 +71,15 @@ class LiveWebSync:
             try:
                 content = self.output_file.read_text(encoding="utf-8")
                 self.cached_live_text = content
-                clean_initial = re.sub(r"\*Last Live Synced:[^\n]*\*", "", content).strip()
-                self.cached_hash = hashlib.md5(clean_initial.encode("utf-8")).hexdigest()
+                self.cached_hash = self._content_hash(content)
             except Exception as e:
                 logger.debug("Could not read initial live_updates.md: %s", e)
+
+    @staticmethod
+    def _content_hash(content: str) -> str:
+        """Hashes the scraped data only, so the sync timestamp alone never counts as a change."""
+        data = re.sub(r"\*Last Live Synced:[^\n]*\*", "", content).strip()
+        return hashlib.md5(data.encode("utf-8")).hexdigest()
 
     def fetch_devfolio(self) -> dict[str, Any]:
         """Fetches hackathon details and schedule from Devfolio API and webpage."""
@@ -245,7 +250,7 @@ class LiveWebSync:
             website_data = self.fetch_website()
             markdown_content = self.compile_markdown(devfolio_data, website_data)
 
-            new_hash = hashlib.md5(markdown_content.encode("utf-8")).hexdigest()
+            new_hash = self._content_hash(markdown_content)
             is_new = new_hash != self.cached_hash or not self.output_file.exists()
 
             self.cached_live_text = markdown_content
@@ -272,6 +277,10 @@ class LiveWebSync:
         """Retrieves the live context, refreshing if needed."""
         _, content = self.sync(force=force)
         return content
+
+    def cached_context(self) -> str:
+        """Returns the last synced live context without touching the network."""
+        return self.cached_live_text
 
     def start_periodic_sync(self, interval_seconds: int = 900) -> None:
         """Starts a periodic background daemon thread to fetch live updates every N seconds (default: 15 mins)."""

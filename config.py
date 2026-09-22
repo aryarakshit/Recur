@@ -19,7 +19,7 @@ BASE_DIR = Path(__file__).resolve().parent
 @dataclass
 class Config:
     # Discord settings
-    discord_token: str = field(default_factory=lambda: os.getenv("DISCORD_TOKEN", "").strip())
+    discord_token: str = field(default_factory=lambda: os.getenv("DISCORD_TOKEN", "").strip(), repr=False)
     organizer_channel_id: int | None = field(
         default_factory=lambda: int(os.getenv("ORGANIZER_CHANNEL_ID", "0")) if os.getenv("ORGANIZER_CHANNEL_ID", "").strip().isdigit() else None
     )
@@ -43,16 +43,6 @@ class Config:
     )
 
     # Channel & Role Restrictions
-    allowed_channel_names: list[str] = field(
-        default_factory=lambda: [
-            c.strip().lower().lstrip("#")
-            for c in os.getenv(
-                "ALLOWED_CHANNELS",
-                "general,ask-mentors,ask-mentor,chat,general-chat,discussion,lounge,welcome,introductions",
-            ).split(",")
-            if c.strip()
-        ]
-    )
     allowed_role_names: list[str] = field(
         default_factory=lambda: [
             r.strip().lower()
@@ -112,8 +102,8 @@ class Config:
     llm_provider: str = field(
         default_factory=lambda: os.getenv("LLM_PROVIDER", "groq").strip().lower()
     )
-    gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", "").strip())
-    groq_api_key: str = field(default_factory=lambda: os.getenv("GROQ_API_KEY", "").strip())
+    gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", "").strip(), repr=False)
+    groq_api_key: str = field(default_factory=lambda: os.getenv("GROQ_API_KEY", "").strip(), repr=False)
     llm_model: str = field(
         default_factory=lambda: os.getenv("LLM_MODEL", "qwen/qwen3.8-27b").strip()
     )

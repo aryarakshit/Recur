@@ -33,15 +33,16 @@ flowchart TD
         Normalizer["Query Normalizer\n(Strips 'so recur', fixes typos e.g. pricepool -> prize pool)"]
         Retriever["Hybrid Knowledge Retriever\n(Dense FAISS Vectors + Lexical Keyword Overlap)"]
         LiveSync["LiveWebSync (Every 15 min)\n(Scrapes recursiveacm.devfolio.co & recursiveacm.in)"]
-        MemUpdate["#recur-mem-update Handler\n(Anchored Explicit Triggers + Live FAISS Re-Indexing)"]
-        KnowledgeBase[("16 Official Knowledge Docs\n+ live_updates.md\n+ memory_updates.md")]
+        MemUpdate["#recur-mem-update Handler\n(remember / update mem / delete mem / list mem)"]
+        MemoryStore[("memory_updates.md\n(Organizer Memory, injected into every prompt)")]
+        KnowledgeBase[("16 Official Knowledge Docs\n+ live_updates.md")]
     end
 
     subgraph Cognitive_Layer["5. 4-Step Cognitive Engine"]
         Read["[READ]\nIngest query, tone, emotional anxiety, RAG context"]
         Understand["[UNDERSTAND]\nIdentify explicit vs implicit blockers & phase"]
-        Think["[THINK & DELIBERATE]\nCross-reference rubric & prioritize memory_updates.md"]
-        Reply["[REPLY]\nFormulate warm, high-IQ mentor guidance"]
+        Think["[THINK & DELIBERATE]\nOrganizer Notes > live status > docs"]
+        Reply["[REPLY]\nShort, direct answer (1–3 sentences)"]
         Cleaner["clean_cognitive_response()\n(Extracts logs, delivers clean Discord text)"]
     end
 
@@ -60,8 +61,8 @@ flowchart TD
     RoleFilter -- "Bot / Dyno" --> Silent
     RoleFilter -- "Verified Hacker / Participant" --> PeerFilter
 
-    MemUpdate -- "Explicit Memory Trigger (4 Patterns)" --> KnowledgeBase
-    KnowledgeBase -. Re-Index .-> Retriever
+    MemUpdate -- "Memory Command" --> MemoryStore
+    MemoryStore -. "All notes, every answer" .-> Read
     MemUpdate -- "Confirmation Card" --> MemConfirm
     MemUpdate -- "Normal Chat / Question" --> Normalizer
 
@@ -117,28 +118,20 @@ flowchart TD
 - **Hybrid Retrieval Architecture (Dense Vector + Lexical Overlap)**:
   - **Dense Vector Search**: FAISS index built on 16 official hackathon documents spanning rules, schedules, venue details, submission criteria, FAQs, and prize tracks.
   - **Lexical Keyword Overlap**: Content keyword matching with English stop-word filtering prevents generic documents (like `chair.md`) from dominating short queries.
-  - **Dynamic Organizer Memory Priority**: All entries in `knowledge/memory_updates.md` are evaluated across a 25-candidate window and given an organizer priority boost (`+0.35`) when query keywords match live organizer directives.
+  - Organizer memory (`memory_updates.md`) is **not** part of the index — it is injected into every prompt instead (see below), so it can never crowd official docs out of the top-4 results.
 - **`LiveWebSync` (Continuous Polling & Daily Maintenance)**:
   - **15-Minute Continuous Polling**: Runs every 15 minutes (900s) as a daemon thread, scraping `https://recursiveacm.devfolio.co/` (API + schedule page) and `https://recursiveacm.in`.
-  - **Data-Payload Hashing**: Compares raw extracted JSON/data hash (excluding dynamic clock timestamps) so FAISS re-indexing only triggers when actual deadlines, announcements, or status change.
+  - **Check Before Hard Facts**: Questions about dates, deadlines, registration, submissions, prizes, results, rounds, venue or fees re-check Devfolio and the website before answering (at most one fetch per minute). The scrape runs in a worker thread, so the Discord event loop never blocks. Other questions use the last synced status.
+  - **Data-Payload Hashing**: Compares the scraped data hash (excluding the `Last Live Synced` timestamp) so the file rewrite and FAISS re-index only happen when actual deadlines, announcements, or status change.
   - **Daily 24-Hour Maintenance Checkpoint**: A dedicated Discord `@tasks.loop(hours=24)` (`daily_memory_sync`) runs an audit sync, forces full freshness verification, and logs results to SQLite `system_metrics` (`daily_sync_status`).
   - **Rate Limiting**: Enforces minimum 60s cooldown between web requests unless forced via `/sync` command or daily maintenance.
-- **Dynamic Memory Ingestion & Removal (`#recur-mem-update`)**:
-  - **Memory Ingestion Triggers** (4 patterns):
-    1. `@recur add this info in your memory .. <info>`
-    2. `add to memory: <info>`
-    3. `auto update memory: <info>`
-    4. `remember this: <info>`
-  - **Memory Removal Triggers** (7 patterns):
-    1. `@recur remove this info from your memory .. <target>`
-    2. `@recur remove from memory: <target>`
-    3. `remove from memory: <target>`
-    4. `remove from mem: <target>`
-    5. `remove mem: <target>`
-    6. `delete from memory: <target>`
-    7. `forget this: <target>`
-  - Automatically writes or purges entries from `memory_updates.md`, updates the SQLite database, rebuilds FAISS vectors in `< 0.1s`, and hot-reloads the retriever with zero downtime.
-  - All other messages are handled as normal conversation.
+- **Organizer Memory (`#recur-mem-update` only)** — `storage/memory_store.py`:
+  - **Save**: start a message with `remember`, `update memory`, `update mem`, `mem update`, `add to memory` or `remember this` (a delimiter such as `:` is optional; chained triggers like `remember or update memory """…"""` work and surrounding quotes are stripped). Replying `remember this` to any message saves that message.
+  - **Delete**: `delete mem #3`, `delete mem prize pool` (keywords; if several memories match, Recur lists them and asks for the `#`), `forget this: …`, or reply `delete this mem` to Recur's "Saved as memory #N" card.
+  - **List**: `list mem` / `show memories` / `what do you remember?` shows every memory with its `#` ID.
+  - Each memory is a `## Memory Update #N` section in `knowledge/memory_updates.md` (IDs are stable) and is logged to SQLite. **Every memory is injected into every answer prompt** as top-priority "Organizer Notes", so a saved note keeps applying — whatever wording participants use — until an organizer deletes it. The question's channel is passed along, so a note about one channel ("…here…") only applies there.
+  - Triggers must start the message, so a sentence that merely mentions "remember" is never a command. An instruction typed without a trigger ("if anyone asks …, say …") gets a hint to prefix it with `remember` rather than being saved silently. Chatter ("ok", "lol") in the channel is ignored; questions get normal answers so organizers can test.
+  - Memory commands typed in `#general` or `#ask-mentors` do nothing, so participants can never change what Recur tells everyone.
 
 ### Layer 5: 4-Step Cognitive Architecture
 - **Active Production Models**:
@@ -148,9 +141,10 @@ flowchart TD
   - **`[READ]`**: Ingests the query, recent conversation history, retrieved knowledge base chunks, and live Devfolio updates with attention to emotional tone.
   - **`[UNDERSTAND]`**: Identifies participant anxiety (e.g. deadline panic, submission cutoff confusion, PPT slide limits, working prototype vs idea phase, Devfolio team formation).
   - **`[THINK & DELIBERATE]`**: Synthesizes official judging criteria (*Innovation 25%, Technical Complexity 25%, Working Prototype 25%, UI/UX 15%, Pitch 10%*), Devfolio submission buffers, and pragmatic mentor advice in `< 40 words`.
-  - **`[REPLY]`**: Formulates an empathetic, encouraging, high-IQ Discord reply.
+  - **`[REPLY]`**: A short, direct answer — 1–3 sentences (under 60 words), bullets only for lists, no greetings or filler.
+- **Source Priority**: Organizer Notes (memory) → Live Devfolio/website status → knowledge base docs.
 - **`clean_cognitive_response()` & Tone Filter**:
-  - Extracts and logs internal reasoning process to server logs while serving clean presentation markdown to Discord.
+  - Extracts and logs internal reasoning process (including Qwen `<think>` blocks, even when cut off by the token limit) to server logs while serving clean presentation markdown to Discord.
   - **Greeting Moderation**: Automatically strips boilerplate `"Hi there!"` / `"Hey there! 👋"` when the participant asked a direct question without greeting, diving straight into the core answer. Greetings are only preserved if the participant explicitly greeted first.
 
 ### Layer 6: Action & Persistence Layer
@@ -189,7 +183,7 @@ flowchart TD
 ### Memory & Knowledge Persistence
 - **FAISS Index**: Persisted to `data/faiss.index` + `data/metadata.json` — survives container restarts.
 - **SQLite Database**: `data/hackbot.db` with WAL — survives restarts, tracks all queries, unanswered questions, conversation history, and dynamic memory updates.
-- **Knowledge Files**: 16 static `.md` files in `knowledge/` + `live_updates.md` (auto-updated every 15 min & daily) + `memory_updates.md` (organizer-controlled) — all version-controlled in Git.
+- **Knowledge Files**: 16 static `.md` files in `knowledge/` + `live_updates.md` (auto-updated every 15 min & daily) + `memory_updates.md` (organizer-controlled) — all version-controlled in Git. Memory saved or deleted at runtime lives on the container's disk: on hosts with an ephemeral disk (e.g. Render free tier) a redeploy restores the committed `memory_updates.md`, so commit important memories or re-add them after deploying.
 
 ---
 
@@ -200,13 +194,12 @@ flowchart TD
 | **Q&A & Guidelines** | **Automated Hackathon Support** | Participant asks question about dates, venue, eligibility, rules, or prizes in `#general` or `#ask-mentors`. | 🟢 `Hacker` | Provides instant, grounded answers using official docs and live Devfolio timeline via Hybrid RAG. | Cites official rules without leaking internal prompt or raw source tags. |
 | **Cognitive Reasoning** | **Situational Anxiety De-escalation** | Participant expresses panic (e.g., last-minute PPT submission, prototype readiness, teammate dropouts). | 🟢 `Hacker` | Explains zero-penalty policy before deadline, advises 15-min Devfolio traffic buffer, and clarifies Round 1 PPT vs Round 2 Prototype requirements. | Internal `[THINK]` logs saved to server; Discord sees only clean mentor guidance. |
 | **Team Recruitment** | **Teammate Request Auto-Forwarding** | Hacker posts teammate recruitment in `#general` or `#ask-mentors` (e.g. *"I am finding teamates"*). | 🟢 `Hacker` / New Member | Forwards request to `#find-your-team` with `@everyone`, quote block, and jump link. Replies to user in chat. | 60-second user cooldown prevents `@everyone` ping spam. |
-| **Team Recruitment** | **In-Channel Team Search Response** | Hacker posts skill set and recruitment request inside `#find-your-team!`. | 🟢 `Hacker` / New Member | Replies in `#find-your-team!` tagging `@everyone` to maximize peer visibility. | Ignores casual greetings and non-recruitment chat in the channel. |
 | **Background Loop** | **Unanswered Message Catch-Up with Situational Awareness** | A participant's question or teammate search was missed or left without reply (on bot boot or every 5 mins). | 🟢 `Hacker` | Scans recent channel history, answers genuinely unanswered queries, and forwards missed teammate searches. | **Situational Check**: Stays silent if a mentor/staff answered in subsequent messages, if someone tagged the author, if author self-resolved, or if Discord reply was used. Never talks over human mentors. |
 | **Live Web Sync** | **Real-Time Deadline & Schedule Updates** | Organizer updates Devfolio schedule or website (e.g. PPT deadline extension). | Everyone | Scrapes site every 15 minutes, indexes changes into FAISS, and answers participants with live dates. | Falls back to cached data if Devfolio or website is temporarily unreachable. |
-| **Dynamic Memory** | **Live Organizer Memory Ingestion & Removal** | Organizer posts dynamic addition or removal trigger in `#recur-mem-update`:<br>• **Add**: `@recur add this info in your memory ..`, `add to memory:`, `auto update memory:`, `remember this:`, `remember:`, `rmember:`, `mem update:`<br>• **Remove**: `@recur remove from memory:`, `remove from mem:`, `remove mem:`, `delete from memory:`, `delete mem:`, `mem delete:`, `mem remove:`, `forget this:`<br>*(All other messages are treated as normal chat)*. | Anyone in `#recur-mem-update` (including 🔴 `Admin`, 🔵 `Core Member`, 🩷 `Volunteer`) | **Auto Updates / Removes Memory**: Appends or purges notes in `knowledge/memory_updates.md`, updates SQLite, rebuilds FAISS vectors, hot-reloads retriever, and confirms via rich card. Directives receive authoritative priority across all channels. | Strict prefix validation prevents casual banter or greetings from polluting knowledge base. Hot-reload has zero downtime. |
+| **Dynamic Memory** | **Organizer Memory: Save, List & Delete** | Organizer types in `#recur-mem-update`:<br>• **Save**: `remember …`, `update memory …`, `update mem …`, `mem update: …`, `add to memory: …`, or reply `remember this`<br>• **Delete**: `delete mem #N`, `delete mem <keywords>`, `forget this: …`, or reply `delete this mem` to the saved card<br>• **List**: `list mem`<br>*(All other messages are treated as normal chat.)* | Anyone in `#recur-mem-update` (including 🔴 `Admin`, 🔵 `Core Member`, 🩷 `Volunteer`) | Saves to `knowledge/memory_updates.md` with a stable `#N` ID and confirms with a short card. Every memory is injected into every answer until deleted. | Triggers must start the message. Commands in `#general` / `#ask-mentors` are ignored. Cards never ping anyone. |
 | **Admin Protection** | **Staff & Organizer Conversation Isolation** | Admin, Moderator, Core Member, Volunteer, or Judge chats or asks questions in ambient chat. | 🔴 `Admin`<br>🟣 `Moderator`<br>🔵 `Core Member`<br>🩷 `Volunteer`<br>🟡 `Judge` | **Bot stays completely silent in standard channels.** Never interrupts human organizers or staff (bypassed only in `#recur-mem-update`). | Verified via `_is_staff_or_bot()` and cached guild member roles. |
 | **Peer Conversation** | **Peer-to-Peer Discussion Filtering** | A user tags another participant (e.g. `@heyimsouvik What's the total size of your ppt?`) or replies inline. | Anyone | **Bot stays silent.** Does not intrude into conversations between two human members. | Evaluated via `has_other_mentions`, `is_reply_to_other`, and regex pings. |
-| **Direct Mention** | **Explicit Mentor Invocation** | Any user tags `@Recur` with a direct question or prompt. | Anyone | Direct override: Always answers questions when explicitly mentioned. | Rejects off-topic queries with polite hackathon focus reminder. |
+| **Direct Mention** | **Explicit Mentor Invocation** | A participant tags `@Recur` with a direct question in `#general`, `#ask-mentors` or `#recur-mem-update`. | Anyone | Direct override: Always answers questions when explicitly mentioned in those channels (mentions elsewhere are ignored). | Rejects off-topic queries with polite hackathon focus reminder. |
 | **Ambient Moderation** | **Off-Topic & Noise Suppression** | Messages containing banter, memes, greetings ("lol", "gm", "hi guys"), or non-hackathon topics. | Anyone | **Bot stays silent.** Does not spam channels with robotic refusal messages. | Strict regex patterns and ambient fallback suppression. |
 | **Slash Commands** | **`/ask <query>`** | User invokes `/ask` slash command. | Anyone | Provides an instant RAG-grounded answer in any channel. | Ephemeral or channel-visible response. |
 | **Slash Commands** | **`/rules`** | User invokes `/rules` slash command. | Anyone | Displays formatted embed with team limits (2–4), 8-slide PPT rule, and judging criteria. | Pre-compiled verified rule summary. |
@@ -238,12 +231,12 @@ flowchart TD
 
 | Channel | Allowed Actions | Disallowed Actions | Notification Rules |
 | :--- | :--- | :--- | :--- |
-| **`#recur-mem-update`** *(aliases: `mem-update`, `recur-memory`)* | 1. Dynamic memory updates (Add triggers: `@recur add this info in your memory ..`, `add to memory:`, `auto update memory:`, `remember this:` / Remove triggers: `remove from mem:`, `remove mem:`, `delete from memory:`, `forget this:`).<br>2. Live zero-downtime FAISS re-indexing.<br>3. Normal chat & interactive Q&A testing for organizers. | None (Staff silence restriction is completely disabled here). | Rich Discord confirmation card with re-indexing status and summary for memory updates; standard conversational reply for normal chat. |
+| **`#recur-mem-update`** *(aliases: `recur-mem-updates`, `recur-memory`, `mem-update`, `memory-update`, `recur-update` — exact names only)* | 1. Memory commands: `remember …` / `update mem …` (save), `delete mem #N` (delete), `list mem` (list).<br>2. Normal Q&A testing for organizers (chatter is ignored). | None (Staff silence restriction is completely disabled here). | Short card with the memory's `#N` ID (never pings anyone); standard reply for questions. |
 | **`#general`** | Ambient hackathon Q&A, teammate search detection & forwarding, direct `@Recur` pings. | Staff conversation interruptions, peer-to-peer mention answers, off-topic chat. | Mentions author on reply; forwards team requests to `#find-your-team`. |
 | **`#ask-mentors` / `#ask-mentor`** | Official rules, judging criteria, technical stack questions, teammate search forwarding. | Intercepting questions explicitly addressed to human mentors (`"Mentors, please check..."`). | Silent fallback: Logs unanswered technical queries for human organizers. |
-| **`#find-your-team!`** | Teammate recruitment announcements, skill offers, team formation. | General chatter, unrelated queries. | Pings `@everyone` with a 60-second author cooldown. |
-| **Restricted Channels** *(#announcements, #rules, etc.)* | None (unless bot is directly `@Recur` mentioned). | Auto-replies, ambient chatter answers. | Completely silent. |
-| **Direct Messages (DMs)** | Full conversational Q&A and hackathon guidance. | Server-wide broadcasts. | One-on-one assistance. |
+| **`#find-your-team!`** | Receives teammate requests forwarded from `#general` / `#ask-mentors`. | Recur never replies inside this channel. | Forwards ping `@everyone` with a 60-second author cooldown. |
+| **Every other channel** *(#announcements, #rules, #help, etc.)* | None — even when `@Recur` is mentioned. | Everything. | Completely silent. |
+| **Direct Messages (DMs)** | None. | Everything. | Completely silent. |
 
 ---
 
@@ -288,19 +281,18 @@ sequenceDiagram
     Handler->>Discord: Reply to Hacker confirming forward to #find-your-team
 
     Note over Admin, Discord: Scenario D: Organizer updating dynamic memory in #recur-mem-update
-    Admin->>Discord: "@recur add this info in your memory .. if anyone asked for prize pool say not yet disclosed"
+    Admin->>Discord: "remember if anyone asks for prize pool say not yet disclosed"
     Discord->>Handler: on_message() in #recur-mem-update
-    Handler->>Handler: _extract_memory_update() -> Matches explicit trigger
-    Handler->>Handler: Commit to knowledge/memory_updates.md & DB
-    Handler->>RAG: trigger_reindex() -> Hot reload FAISS (<0.1s)
-    Handler->>Discord: Send rich green confirmation card
+    Handler->>Handler: _parse_memory_command() -> ("add", note)
+    Handler->>Handler: MemoryStore.add() -> memory_updates.md (#N) & DB
+    Handler->>Discord: "Saved as memory #N" card
     Note over Hacker, Discord: Subsequent query anywhere: "so recur what is the pricepool?"
     Hacker->>Discord: "so recur what is the pricepool?"
     Discord->>Handler: on_message()
     Handler->>RAG: normalize_query_text() -> "prize pool"
-    Handler->>RAG: retrieve("prize pool") -> Hybrid search prioritizes memory_updates.md (+0.35 boost)
-    Handler->>LLM: Cognitive prompt with organizer directive as top authority
-    LLM-->>Handler: "The prize pool is not yet disclosed..."
+    Handler->>RAG: retrieve("prize pool") -> official doc chunks
+    Handler->>LLM: Prompt = Organizer Notes (all memories) + doc chunks + live status
+    LLM-->>Handler: "The prize pool hasn't been disclosed yet."
     Handler->>Discord: Reply to Hacker
 ```
 
@@ -317,11 +309,12 @@ All configuration is centralized in `config.py` with `.env` overrides. Key varia
 | `LLM_MODEL` | `qwen/qwen3.8-27b` | Primary Qwen model |
 | `GROQ_API_KEY` | — | Groq API key |
 | `EMBEDDING_MODEL` | `text-embedding-004` | Embedding model for FAISS indexing |
-| `ALLOWED_CHANNELS` | `general,ask-mentors,...` | Comma-separated channel names for ambient replies |
 | `ALLOWED_ROLES` | `hacker,hackers,participant,...` | Roles permitted to receive ambient answers |
 | `EXCLUDED_ROLES` | `admin,moderator,core member,...` | Roles that bot ignores in ambient chat |
 | `TEAM_FINDING_CHANNELS` | `find-your-team,find-your-team!` | Channels where teammate search gets `@everyone` |
-| `MEMORY_CHANNEL_NAMES` | `recur-mem-update,recur-memory,...` | Channels where dynamic memory updates work |
+| `MEMORY_CHANNEL_NAMES` | `recur-mem-update,recur-memory,...` | Exact channel names where memory commands work |
+
+> Recur answers only in `#general`, `#ask-mentors` and the memory channel. This is fixed in code (`ANSWER_CHANNELS` in `discord_bot/message_handler.py`), not configurable, so an environment variable can't open other channels.
 | `MODERATOR_MODE` | `true` | Enable staff silence & situational awareness |
 | `PORT` | `7860` | Health check HTTP server port (Render/HF Spaces) |
 | `RENDER_EXTERNAL_URL` | — | Auto-set by Render; enables keep-alive self-ping |
@@ -355,7 +348,7 @@ Recur/
 ├── knowledge/              # 16 static + 2 dynamic knowledge files
 │   ├── chair.md, contacts.md, eligibility.md, faq.md, judging.md
 │   ├── links.md, live_updates.md (AUTO-UPDATED every 15 min)
-│   ├── memory_updates.md   (ORGANIZER-CONTROLLED)
+│   ├── memory_updates.md   (ORGANIZER MEMORY — not indexed, injected into every prompt)
 │   ├── mentors.md, prizes.md, problem-statements.md
 │   ├── rules.md, schedule.md, sponsors.md, submission.md
 │   ├── technology-rules.md, venue.md
@@ -373,7 +366,8 @@ Recur/
 ├── storage/                # Memory & persistence abstractions
 │   ├── __init__.py
 │   ├── database.py         # SQLite operations (see database/db.py)
-│   └── memory.py           # ConversationMemory sliding window
+│   ├── memory.py           # ConversationMemory sliding window
+│   └── memory_store.py     # Organizer memory (#recur-mem-update) store
 └── tests/                  # Pytest suite (unit + integration)
 ```
 
@@ -430,5 +424,5 @@ sudo systemctl enable --now hackbot
 
 ---
 
-*Architecture document version: 2026-09-21*  
-*Last updated to reflect live sync every 15 min, 24/7 deployment configs, and heavy-demand resilience patterns.*
+*Architecture document version: 2026-09-23*  
+*Last updated to reflect prompt-injected organizer memory with IDs, the strict three-channel rule, and live checks before hard-fact answers.*

@@ -24,6 +24,7 @@ from config import config
 from rag.retriever import KnowledgeRetriever
 from storage.database import Database
 from storage.memory import ConversationMemory
+from storage.memory_store import MemoryStore
 
 # Ensure UTF-8 output on Windows
 sys.stdout.reconfigure(encoding="utf-8")
@@ -53,6 +54,7 @@ async def ask(question: str) -> None:
         llm_provider=llm_provider,
         default_organizer_channel=config.organizer_channel_name,
         classifier=classifier,
+        memory_store=MemoryStore(config.knowledge_dir),
     )
     memory = ConversationMemory(db=db, max_history_turns=6)
 

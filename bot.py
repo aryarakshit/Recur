@@ -18,12 +18,13 @@ from ai.generator import AnswerGenerator
 from ai.provider import get_llm_provider
 from config import config
 from discord_bot.commands import setup_commands
-from discord_bot.message_handler import MessageHandler
+from discord_bot.message_handler import ANSWER_CHANNELS, MessageHandler
 from rag.indexer import KnowledgeIndexer
 from rag.retriever import KnowledgeRetriever
 from rag.live_sync import LiveWebSync
 from storage.database import Database
 from storage.memory import ConversationMemory
+from storage.memory_store import MemoryStore
 
 import collections
 import json
@@ -93,7 +94,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
                 "has_discord_token": config.has_discord_token,
                 "token_prefix": (config.discord_token[:6] + "...") if config.discord_token else None,
                 "llm_provider": config.llm_provider,
-                "allowed_channels": config.allowed_channel_names,
+                "answer_channels": sorted(ANSWER_CHANNELS) + config.memory_channel_names,
                 "last_error": str(_app_state.get("last_error")) if _app_state.get("last_error") else None,
                 "recent_logs": list(_log_buffer)[-50:],
             }
@@ -204,11 +205,13 @@ def main() -> None:
         embedding_provider=embedding_provider,
     )
 
-    # If FAISS index doesn't exist yet, build it automatically
-    if not retriever.is_ready():
-        logger.info("Knowledge base index not found. Building initial index...")
-        indexer.build_index()
-        retriever.load()
+    # Rebuild on every start so edited knowledge docs are picked up after a deploy
+    logger.info("Building knowledge base index...")
+    indexer.build_index()
+    retriever.load()
+
+    # Organizer memory from #recur-mem-update, shared by the handler (writes) and generator (reads)
+    memory_store = MemoryStore(config.knowledge_dir)
 
     # Initialize Live Web Sync for Devfolio and recursiveacm.in
     live_sync = LiveWebSync(
@@ -227,6 +230,7 @@ def main() -> None:
         default_organizer_channel=config.organizer_channel_name,
         classifier=classifier,
         live_sync=live_sync,
+        memory_store=memory_store,
     )
     memory = ConversationMemory(db=db, max_history_turns=6)
     message_handler = MessageHandler(
@@ -236,7 +240,7 @@ def main() -> None:
         memory=memory,
         database=db,
         config=config,
-        indexer=indexer,
+        memory_store=memory_store,
     )
 
     # Check for Discord Token

@@ -9,16 +9,104 @@ import time
 from typing import Any, TYPE_CHECKING
 import discord
 
+from storage.memory_store import MemoryStore
+
 if TYPE_CHECKING:
     from ai.classifier import MessageClassifier
     from ai.generator import AnswerGenerator
     from config import Config
-    from rag.indexer import KnowledgeIndexer
     from rag.retriever import KnowledgeRetriever
     from storage.database import Database
     from storage.memory import ConversationMemory
+    from storage.memory_store import MemoryEntry
 
 logger = logging.getLogger(__name__)
+
+DISCORD_MESSAGE_LIMIT = 2000
+# Besides #recur-mem-update, these are the only channels Recur answers in.
+ANSWER_CHANNELS = {"general", "ask-mentors"}
+
+# Memory commands must start the message ("remember ...", "update mem ...", "delete mem ..."),
+# so a sentence that merely mentions a trigger word is never treated as a command.
+_LEAD = r"^\s*(?:@?recur\b[\s,:]*)?(?:(?:please|pls|plz|kindly)\s+)?"
+# "this" belongs to the trigger only before a delimiter, so "remember this is the venue" keeps "this".
+_THIS = r"\s+this(?=\s*(?:[:;.\-–—/>|]|$))"
+_ADD_TRIGGERS = (
+    r"add\s+(?:this\s+)?(?:info\s+|information\s+)?(?:in|to|into)\s+(?:your\s+)?memory"
+    r"|(?:auto\s+)?update\s+memory"
+    rf"|remember{_THIS}"
+)
+_ADD_SHORTHAND = (
+    r"(?:auto\s+)?update\s+(?:your\s+)?mem(?:ory)?"
+    r"|mem(?:ory)?\s+(?:update|add|save)"
+    r"|(?:add|save)\s+(?:this\s+)?(?:to|in|into)\s+mem(?:ory)?"
+    rf"|(?:remember|rmember|remeber|rember)(?:\s+that|{_THIS})?"
+)
+_DELETE_TRIGGERS = (
+    r"remove\s+(?:this\s+)?(?:info\s+|information\s+)?(?:from|in)\s+(?:your\s+)?mem(?:ory)?"
+    r"|remove\s+(?:from\s+)?mem(?:ory)?"
+    r"|delete\s+(?:from\s+)?memory"
+    r"|forget(?:\s+(?:this|about))?"
+)
+_DELETE_SHORTHAND = (
+    r"(?:delete|del|remove|erase)\s+(?:from\s+)?(?:this\s+|that\s+|the\s+)?mem(?:ory)?"
+    r"|mem(?:ory)?\s+(?:delete|del|remove)"
+)
+
+
+def _command_re(triggers: str) -> re.Pattern[str]:
+    trigger = f"(?:{triggers})"
+    # Triggers may be chained, e.g. "remember or update memory: ..." or "update memory/ remember this: ...".
+    return re.compile(
+        rf"{_LEAD}{trigger}(?:\s*(?:or|and|/|,|&)\s*{trigger})*\b(?P<sep>[\s:;.\-–—/>|]*)(?P<arg>.*)$",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+
+_ADD_RE = _command_re(_ADD_TRIGGERS)
+_ADD_MEM_CHANNEL_RE = _command_re(f"{_ADD_TRIGGERS}|{_ADD_SHORTHAND}")
+_DELETE_RE = _command_re(_DELETE_TRIGGERS)
+_DELETE_MEM_CHANNEL_RE = _command_re(f"{_DELETE_TRIGGERS}|{_DELETE_SHORTHAND}")
+_LIST_RE = re.compile(
+    _LEAD
+    + r"(?:(?:list|show|view|see|check)\s+(?:all\s+)?(?:(?:the|your|my|saved)\s+)?mem(?:ory|ories|s)?"
+    r"|mem(?:ory|ories)?\s+list|what\s+do\s+you\s+remember)\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
+_ID_LIST_RE = re.compile(r"(?:#?\s*\d+\s*(?:,|&|and)?\s*)+", re.IGNORECASE)
+# Arguments that point at the replied-to message instead of carrying text.
+_THIS_WORDS = {
+    "", "this", "that", "it", "this one", "that one", "this mem", "this memory",
+    "that mem", "that memory", "this note", "this info",
+}
+# Instructions typed without a trigger ("if anyone asks ..., say ...") get a hint instead
+# of being saved silently.
+_DIRECTIVE_RE = re.compile(
+    r"^\s*(?:if\s+(?:any|some)\s*(?:one|body)\b|if\s+(?:a\s+)?(?:participant|hacker|user)s?\b"
+    r"|whenever\b|from\s+now\s+on\b|tell\s+(?:them|everyone|participants|people|hackers|users)\b)",
+    re.IGNORECASE,
+)
+_QUOTE_PAIRS = (('"""', '"""'), ("'''", "'''"), ("```", "```"), ('"', '"'), ("'", "'"), ("`", "`"), ("“", "”"))
+
+# Replies never ping @everyone/@here; memory cards echo organizer text, so they ping nobody.
+NO_EVERYONE_PING = discord.AllowedMentions(everyone=False)
+MEMORY_CARD_MENTIONS = discord.AllowedMentions(everyone=False, users=False, roles=False, replied_user=True)
+
+
+def _unwrap_quotes(text: str) -> str:
+    """Strips quotes that wrap the whole payload, e.g. remember \"\"\"<note>\"\"\"."""
+    text = text.strip()
+    for open_q, close_q in _QUOTE_PAIRS:
+        if len(text) <= len(open_q) + len(close_q):
+            continue
+        inner = text[len(open_q):-len(close_q)]
+        if text.startswith(open_q) and text.endswith(close_q) and open_q not in inner and close_q not in inner:
+            return inner.strip()
+    return text
+
+
+def _fit_discord(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> str:
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
 class SafeTyping:
@@ -52,7 +140,7 @@ class MessageHandler:
         memory: ConversationMemory,
         database: Database,
         config: Config,
-        indexer: KnowledgeIndexer | None = None,
+        memory_store: MemoryStore | None = None,
     ) -> None:
         self.classifier = classifier
         self.generator = generator
@@ -60,7 +148,7 @@ class MessageHandler:
         self.memory = memory
         self.db = database
         self.config = config
-        self.indexer = indexer
+        self.memory_store = memory_store or MemoryStore(config.knowledge_dir)
         self.last_team_ping: dict[int, float] = {}
         self._member_cache: dict[int, tuple[discord.Member, float]] = {}
         self._user_last_query: dict[int, float] = {}
@@ -124,62 +212,29 @@ class MessageHandler:
         ch_id = getattr(channel, "id", None)
         if self.config.memory_channel_id and ch_id == self.config.memory_channel_id:
             return True
-
-        mem_channels = getattr(
-            self.config,
-            "memory_channel_names",
-            ["recur-mem-update", "recur-mem-updates", "recur-memory", "mem-update", "memory-update", "recur-update"],
-        )
-        raw_names = []
-        name = getattr(channel, "name", None)
-        if isinstance(name, str):
-            raw_names.append(name.lower())
-        parent = getattr(channel, "parent", None)
-        if parent:
-            pname = getattr(parent, "name", None)
-            if isinstance(pname, str):
-                raw_names.append(pname.lower())
-
-        for raw in raw_names:
-            clean = re.sub(r"[^a-z0-9\-]", "", raw).strip("-")
-            for mc in mem_channels:
-                clean_mc = re.sub(r"[^a-z0-9\-]", "", mc.lower()).strip("-")
-                if clean == clean_mc or clean_mc in clean or clean in clean_mc:
-                    return True
-        return False
+        # Exact names only: a substring match made channels like #updates or #recur count
+        # as the memory channel, letting anyone there rewrite the bot's memory.
+        return self._channel_matches(channel, set(self.config.memory_channel_names))
 
     def _is_channel_allowed(self, channel: discord.abc.Messageable) -> bool:
         """Verifies that replies are limited to general, ask-mentors, or memory updates."""
-        if self._is_memory_update_channel(channel):
-            return True
-
-        allowed = self.config.allowed_channel_names
-        if not allowed:
-            return True
-
-        raw_names = []
-        name = getattr(channel, "name", None)
-        if isinstance(name, str):
-            raw_names.append(name.lower())
-        parent = getattr(channel, "parent", None)
-        if parent:
-            pname = getattr(parent, "name", None)
-            if isinstance(pname, str):
-                raw_names.append(pname.lower())
-
-        for raw in raw_names:
-            clean = re.sub(r"[^a-z0-9\-]", "", raw).strip("-")
-            for al in allowed:
-                clean_al = re.sub(r"[^a-z0-9\-]", "", al.lower()).strip("-")
-                if clean == clean_al or clean_al in clean:
-                    return True
-        return False
+        return self._is_response_channel(channel)
 
     def _is_response_channel(self, channel: Any) -> bool:
-        """Return whether the bot is allowed to process messages in this channel."""
-        return self._is_memory_update_channel(channel) or self._channel_matches(
-            channel, {"general", "ask-mentors"}
-        )
+        """Return whether the bot is allowed to process messages in this channel.
+
+        Recur only ever answers in #general, #ask-mentors and #recur-mem-update.
+        """
+        return self._is_memory_update_channel(channel) or self._channel_matches(channel, ANSWER_CHANNELS)
+
+    @staticmethod
+    def _home_channel_name(channel: Any) -> str | None:
+        """Name of the channel a message lives in (the parent channel for threads)."""
+        for ch in (getattr(channel, "parent", None), channel):
+            name = getattr(ch, "name", None)
+            if isinstance(name, str):
+                return name.lstrip("#")
+        return None
 
     def _channel_matches(self, channel: Any, names: set[str]) -> bool:
         raw_names = []
@@ -194,128 +249,6 @@ class MessageHandler:
             if clean in {re.sub(r"[^a-z0-9\-]", "", n).strip("-") for n in names}:
                 return True
         return False
-
-    def _is_team_finding_channel(self, channel: Any) -> bool:
-        """Verifies if the message was sent in a team-finding channel (e.g. #find-your-team!)."""
-        team_channels = getattr(self.config, "team_finding_channel_names", ["find-your-team", "find-your-team!"])
-        if not team_channels:
-            team_channels = ["find-your-team", "find-your-team!"]
-
-        raw_names = []
-        name = getattr(channel, "name", None)
-        if isinstance(name, str):
-            raw_names.append(name.lower())
-        parent = getattr(channel, "parent", None)
-        if parent:
-            pname = getattr(parent, "name", None)
-            if isinstance(pname, str):
-                raw_names.append(pname.lower())
-
-        for raw in raw_names:
-            clean = re.sub(r"[^a-z0-9\-]", "", raw).strip("-")
-            for tc in team_channels:
-                clean_tc = re.sub(r"[^a-z0-9\-]", "", tc.lower()).strip("-")
-                if clean == clean_tc or clean_tc in clean or clean in clean_tc:
-                    return True
-        return False
-
-    async def _handle_team_finding_message(
-        self,
-        message: discord.Message,
-        bot_user: discord.ClientUser,
-        is_mentioned: bool = False,
-    ) -> bool:
-        """Handles messages sent in #find-your-team! by pinging @everyone if looking for members.
-
-        Returns:
-            True if handled (either replied with @everyone or ignored as non-question chatter).
-            False if it is a direct mention question that should fall back to the Q&A pipeline.
-        """
-        # Ignore bots and Dyno
-        if getattr(message.author, "bot", False) or message.author.id == bot_user.id:
-            return True
-        if "dyno" in getattr(message.author, "name", "").lower():
-            return True
-
-        text = self._clean_content(message, bot_user)
-        if not text:
-            return True
-
-        clean = text.strip().lower()
-
-        # Ignore chatter / noise / greetings
-        if self.classifier.is_chatter(clean):
-            return True
-
-        # Check if the message is looking for members / team recruitment
-        is_teammate = self.classifier.is_teammate_search(clean)
-
-        # In a dedicated team-finding channel, also match non-chatter messages discussing teams or recruitment
-        if not is_teammate:
-            has_team_word = any(
-                w in clean
-                for w in ["team", "teams", "teammate", "teammates", "teamate", "teamates", "member", "members", "group", "squad"]
-            )
-            has_recruitment_word = any(
-                w in clean
-                for w in [
-                    "find", "finding", "seek", "seeking", "search", "searching", "look", "looking",
-                    "need", "require", "join", "vacancy", "vacancies",
-                    "spot", "spots", "slot", "slots", "open", "available", "dm", "pm",
-                    "frontend", "backend", "fullstack", "dev", "developer", "designer", "ai", "ml"
-                ]
-            )
-            # Must not be an official hackathon rule inquiry
-            is_rule_query = any(clean.startswith(q) for q in ["what", "can", "is", "are", "how", "where"]) and any(
-                term in clean for term in ["limit", "maximum", "rule", "rules", "allowed", "allow", "size", "solo", "minimum"]
-            )
-            if has_team_word and has_recruitment_word and not is_rule_query and len(clean.split()) >= 3:
-                is_teammate = True
-
-        if not is_teammate:
-            # If user explicitly asked the bot a question, allow falling through to Q&A
-            if is_mentioned:
-                return False
-            logger.info("Ignoring non-team-search message in team channel: '%s'", text)
-            return True
-
-        # Cooldown check: prevent rapid @everyone spam from the same author (60s)
-        user_id = message.author.id
-        now = time.time()
-        last_ping = self.last_team_ping.get(user_id, 0.0)
-        if now - last_ping < 60.0:
-            logger.info("Skipping @everyone ping for %s in #%s (user cooldown active)", message.author, getattr(message.channel, "name", "channel"))
-            return True
-
-        self.last_team_ping[user_id] = now
-        logger.info("Triggered team recruitment @everyone reply for %s in #%s", message.author, getattr(message.channel, "name", "channel"))
-
-        reply_content = (
-            "@everyone 📢 **Looking for Team Members!**\n"
-            "Check out this request above 👆 — reply or DM if you want to team up! 🤝"
-        )
-
-        try:
-            await message.reply(
-                reply_content,
-                allowed_mentions=discord.AllowedMentions(everyone=True, replied_user=True),
-            )
-        except discord.Forbidden:
-            logger.warning(
-                "Bot lacks 'Mention @everyone' permission in #%s. Falling back to sending without mention.",
-                getattr(message.channel, "name", "channel"),
-            )
-            try:
-                await message.reply(
-                    reply_content,
-                    allowed_mentions=discord.AllowedMentions(everyone=False, replied_user=True),
-                )
-            except Exception as e:
-                logger.error("Failed to send teammate recruitment fallback reply: %s", e)
-        except Exception as e:
-            logger.error("Failed to send teammate recruitment reply: %s", e)
-
-        return True
 
     def _get_team_finding_channel(self, guild: discord.Guild | None) -> discord.TextChannel | None:
         """Finds the #find-your-team! text channel in the guild."""
@@ -415,304 +348,167 @@ class MessageHandler:
         except Exception as e:
             logger.error("Failed to reply to author in #%s: %s", getattr(message.channel, "name", "channel"), e)
 
-    def _extract_memory_update(self, text: str, is_memory_channel: bool = False) -> str | None:
-        """Detects if the message is requesting to add/update information in memory.
+    def _parse_memory_command(self, text: str, is_memory_channel: bool = False) -> tuple[str, str] | None:
+        """Parses a memory command at the start of a message.
 
-        ONLY triggers on:
-        1. @recur add this info in your memory .. <info>
-        2. add to memory: <info>
-        3. auto update memory: <info>
-        4. remember this: <info>
-
-        Otherwise returns None (normal chat).
+        Returns (action, argument) with action "add", "delete" or "list", or None for
+        normal chat. An empty argument means the command targets the replied-to message
+        ("remember this", "delete this mem"). Shorthand triggers such as "remember ...",
+        "update mem ..." and "delete mem ..." only apply in #recur-mem-update.
         """
         clean = text.strip()
         if not clean:
             return None
+        if is_memory_channel and _LIST_RE.match(clean):
+            return "list", ""
 
-        def _clean_payload(info_candidate: str) -> str:
-            clean_p = re.sub(r"^[\s.\-–—:/]+", "", info_candidate).strip()
-            clean_p = re.sub(
-                r"^(?:(?:and\s+)?(?:also\s+)?(?:remember\s+this|remember\s+that|add\s+to\s+memory|add\s+this|update\s+memory|note)\s*[:\-–—./]*\s*)+",
-                "",
-                clean_p,
-                flags=re.IGNORECASE,
-            ).strip()
-            return clean_p
+        delete_re, add_re = (
+            (_DELETE_MEM_CHANNEL_RE, _ADD_MEM_CHANNEL_RE) if is_memory_channel else (_DELETE_RE, _ADD_RE)
+        )
+        m = delete_re.match(clean)
+        if m:
+            target = _unwrap_quotes(m.group("arg")).rstrip(".!")
+            return "delete", "" if target.lower() in _THIS_WORDS else target
 
-        # Explicit trigger patterns:
-        # 1. "@recur add this info in your memory .. <info>" (or without @recur, or with "to")
-        # 2. "add to memory: <info>" (or "add to memory .. <info>")
-        # 3. "auto update memory: <info>" (or "auto update memory .. <info>", or "update memory: <info>")
-        # 4. "remember this: <info>" (or "remember this .. <info>")
-        patterns = [
-            r"^(?:@?recur\s+)?(?:please\s+)?add\s+(?:this\s+)?(?:info|information)?\s*(?:in|to|into)\s*(?:your\s+)?memory\s*[:\-–—.]*\s*(.+)$",
-            r"^(?:@?recur\s+)?(?:please\s+)?add\s+to\s+memory\s*[:\-–—.]*\s*(.+)$",
-            r"^(?:@?recur\s+)?(?:please\s+)?(?:auto\s+)?update\s+memory\s*[:\-–—.]*\s*(.+)$",
-            r"^(?:@?recur\s+)?(?:please\s+)?remember\s+this\s*[:\-–—.]*\s*(.+)$",
-        ]
-        if is_memory_channel:
-            patterns.extend([
-                r"^(?:@?recur\s+)?(?:please\s+)?mem(?:ory)?\s+update\s*[:\-–—./]?\s+(.+)$",
-                r"^(?:@?recur\s+)?(?:please\s+)?r(?:e)?member\s*[:\-–—./]+\s*(.+)$",
-                r"^(?:@?recur\s+)?(?:please\s+)?remember\s*[:\-–—./]+\s*(.+)$",
-                r"^(?:@?recur\s+)?(?:please\s+)?update\s+mem(?:ory)?\s*[:\-–—./]?\s+(.+)$",
-            ])
-
-        for pat in patterns:
-            m = re.match(pat, clean, re.IGNORECASE | re.DOTALL)
-            if m:
-                info = _clean_payload(m.group(1))
-                if len(info) >= 3:
-                    return info
-
-        # Do not search for triggers in the middle of a sentence. Otherwise a
-        # quoted instruction such as "if someone says update memory, ..." can
-        # accidentally become a real memory command.
+        m = add_re.match(clean)
+        if m:
+            info = _unwrap_quotes(m.group("arg"))
+            if info.lower().rstrip(".!") in _THIS_WORDS:
+                return "add", ""
+            # "remember when the deadline was?" is a question, not a note to save.
+            if info.endswith("?") and ":" not in m.group("sep"):
+                return None
+            return ("add", info) if len(info) >= 3 else None
         return None
 
-    async def _handle_memory_update(
+    def _extract_memory_update(self, text: str, is_memory_channel: bool = False) -> str | None:
+        """Returns the note to save if the message is a memory-add command with text."""
+        command = self._parse_memory_command(text, is_memory_channel)
+        return command[1] if command and command[0] == "add" and command[1] else None
+
+    def _extract_memory_removal(self, text: str, is_memory_channel: bool = False) -> str | None:
+        """Returns the delete target (ID or keywords) if the message is a memory-delete command."""
+        command = self._parse_memory_command(text, is_memory_channel)
+        return command[1] if command and command[0] == "delete" and command[1] else None
+
+    async def _run_memory_command(
         self,
         message: discord.Message,
-        info_text: str,
+        action: str,
+        argument: str,
+        referenced: discord.Message | None,
         bot_user: discord.ClientUser,
-    ) -> bool:
-        """Appends new information to knowledge/memory_updates.md, rebuilds the vector index,
-        reloads the retriever, logs to database, and confirms the update to the channel.
-        """
-        author_name = getattr(message.author, "display_name", getattr(message.author, "name", "Organizer"))
-        now_dt = datetime.now(timezone.utc)
-        timestamp_str = now_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
-
-        # 1. Append to knowledge/memory_updates.md
-        kb_file = self.config.knowledge_dir / "memory_updates.md"
-        is_new_file = not kb_file.exists()
-
-        entry_text = (
-            f"\n\n## Memory Update by {author_name} ({timestamp_str})\n"
-            f"- **Channel**: #{getattr(message.channel, 'name', 'recur-mem-update')}\n"
-            f"- **Author**: {author_name} ({message.author.id})\n"
-            f"- **Information**:\n"
-            f"  {info_text.strip()}\n"
-        )
-
+    ) -> None:
+        if action == "list":
+            reply = self._format_memory_list()
+        elif action == "add":
+            reply = self._save_memory(message, argument, referenced)
+        else:
+            reply = self._delete_memory(argument, referenced, bot_user)
         try:
-            if is_new_file:
-                header = (
-                    "# Recur Dynamic Memory & Live Organizer Updates\n"
-                    f"*Last Updated: {timestamp_str}*\n\n"
-                    "> Official dynamic updates, announcements, and memory additions provided by organizers via #recur-mem-update.\n"
-                )
-                kb_file.write_text(header + entry_text.strip(), encoding="utf-8")
-            else:
-                with open(kb_file, "a", encoding="utf-8") as f:
-                    f.write(entry_text)
-            logger.info("Saved memory update to %s: '%s'", kb_file, info_text[:60])
+            await message.reply(_fit_discord(reply), allowed_mentions=MEMORY_CARD_MENTIONS)
         except Exception as e:
-            logger.error("Failed to write to %s: %s", kb_file, e)
-            await message.reply(f"❌ Failed to write memory update to disk: {e}")
-            return False
+            logger.error("Failed to send memory %s reply: %s", action, e)
 
-        # 2. Log to database
+    def _save_memory(self, message: discord.Message, info: str, referenced: discord.Message | None) -> str:
+        # "remember this" as a reply saves the replied-to message.
+        text = info or (getattr(referenced, "content", "") or "").strip()
+        if not text:
+            return "What should I remember? Send `remember <note>`, or reply `remember this` to a message."
+
+        author_name = getattr(message.author, "display_name", getattr(message.author, "name", "Organizer"))
+        entry = self.memory_store.add(text, author=author_name, author_id=message.author.id)
         try:
             self.db.log_memory_update(
-                content=info_text.strip(),
+                content=entry.text,
                 channel_id=message.channel.id,
                 user_id=message.author.id,
                 author_name=author_name,
-                timestamp=now_dt.timestamp(),
+                timestamp=datetime.now(timezone.utc).timestamp(),
             )
         except Exception as e:
             logger.warning("Could not log memory update to database: %s", e)
 
-        # 3. Auto update memory: Re-index FAISS and reload KnowledgeRetriever
-        reindex_details = ""
-        try:
-            if self.indexer:
-                stats = self.indexer.build_index()
-                chunk_count = stats.get("chunk_count", 0)
-                reindex_details = f"Re-indexed {chunk_count} chunks in {stats.get('time_taken', 0.0)}s."
-            if self.retriever:
-                self.retriever.load()
-            logger.info("Auto-updated memory and re-indexed FAISS successfully.")
-        except Exception as e:
-            logger.error("Failed to rebuild FAISS index during memory update: %s", e)
-            reindex_details = f"Re-indexing notice: {e}"
-
-        # 4. Acknowledge and confirm in Discord
-        reply_content = (
-            f"🧠 **Memory Updated Successfully!**\n\n"
-            f"**Stored Information**:\n"
-            f"> {info_text.strip()}\n\n"
-            f"✅ **Actions Completed**:\n"
-            f"• Written to persistent knowledge base (`knowledge/memory_updates.md`)\n"
-            f"• Auto-updated vector index & reloaded retriever ({reindex_details or 'Ready'})\n"
-            f"• All future participant queries across `#general`, `#ask-mentors`, and `/ask` will now use this memory! 🚀"
+        return (
+            f"🧠 Saved as memory #{entry.id}\n"
+            f"> {entry.preview(1500)}\n"
+            f"I'll follow this in #general and #ask-mentors until it's deleted "
+            f"(`delete mem #{entry.id}`, or reply `delete this mem`)."
         )
 
-        try:
-            await message.reply(
-                reply_content,
-                allowed_mentions=discord.AllowedMentions(replied_user=True),
-            )
-            return True
-        except Exception as e:
-            logger.error("Failed to send memory update confirmation reply: %s", e)
-            return False
-
-    def _extract_memory_removal(self, text: str, is_memory_channel: bool = False) -> str | None:
-        """Detects if the message is requesting to remove/forget information from memory.
-
-        Triggers:
-        1. @recur remove this info from your memory .. <target>
-        2. @recur remove from memory: <target>
-        3. remove from memory: <target>
-        4. remove from mem: <target>
-        5. remove mem: <target>
-        6. delete from memory: <target>
-        7. forget this: <target>
-        """
-        clean = text.strip()
-        if not clean:
-            return None
-
-        def _clean_payload(info_candidate: str) -> str:
-            clean_p = re.sub(r"^[\s.\-–—:/]+", "", info_candidate).strip()
-            clean_p = re.sub(
-                r"^(?:(?:and\s+)?(?:also\s+)?(?:remove\s+from\s+mem(?:ory)?|remove\s+mem(?:ory)?|delete\s+from\s+mem(?:ory)?|forget\s+this|forget)\s*[:\-–—./]*\s*)+",
-                "",
-                clean_p,
-                flags=re.IGNORECASE,
-            ).strip()
-            return clean_p
-
-        patterns = [
-            r"^(?:@?recur\s+)?(?:please\s+)?remove\s+(?:this\s+)?(?:info|information)?\s*(?:from|in)\s*(?:your\s+)?mem(?:ory)?\s*[:\-–—.]*\s*(.+)$",
-            r"^(?:@?recur\s+)?(?:please\s+)?remove\s+(?:from\s+)?mem(?:ory)?\s*[:\-–—.]*\s*(.+)$",
-            r"^(?:@?recur\s+)?(?:please\s+)?delete\s+(?:from\s+)?memory\s*[:\-–—.]*\s*(.+)$",
-            r"^(?:@?recur\s+)?(?:please\s+)?forget\s+(?:this|about)?\s*[:\-–—.]*\s*(.+)$",
-        ]
-        if is_memory_channel:
-            patterns.extend([
-                r"^(?:@?recur\s+)?(?:please\s+)?delete\s+mem(?:ory)?\s*[:\-–—./]?\s+(.+)$",
-                r"^(?:@?recur\s+)?(?:please\s+)?mem(?:ory)?\s+delete\s*[:\-–—./]?\s+(.+)$",
-                r"^(?:@?recur\s+)?(?:please\s+)?mem(?:ory)?\s+remove\s*[:\-–—./]?\s+(.+)$",
-            ])
-
-        for pat in patterns:
-            m = re.match(pat, clean, re.IGNORECASE | re.DOTALL)
-            if m:
-                target = _clean_payload(m.group(1))
-                if len(target) >= 2:
-                    return target
-
-        # In-line trigger search
-        trigger_match = re.search(
-            r"(?:remove\s+(?:this\s+)?(?:info\s+)?(?:from|in)\s+(?:your\s+)?mem(?:ory)?|remove\s+from\s+mem(?:ory)?|remove\s+mem(?:ory)?|delete\s+from\s+mem(?:ory)?|forget\s+(?:this|about))\s*[:\-–—.]*\s*(.+)$",
-            clean,
-            re.IGNORECASE | re.DOTALL,
-        )
-        if trigger_match:
-            target = _clean_payload(trigger_match.group(1))
-            if len(target) >= 2:
-                return target
-
-        return None
-
-    async def _handle_memory_removal(
+    def _delete_memory(
         self,
-        message: discord.Message,
-        target_text: str,
+        target: str,
+        referenced: discord.Message | None,
         bot_user: discord.ClientUser,
-    ) -> bool:
-        """Removes matching memory entries from knowledge/memory_updates.md, rebuilds FAISS,
-        updates the database, and confirms removal in Discord.
-        """
-        target = target_text.strip()
-        kb_file = self.config.knowledge_dir / "memory_updates.md"
-        if not kb_file.exists():
-            await message.reply(f"⚠️ Dynamic memory is currently empty. No entries found matching `{target}`.")
-            return True
+    ) -> str:
+        if not target:
+            ids = self._memory_ids_in_reference(referenced, bot_user)
+            if not ids:
+                return (
+                    "Which memory? Send `delete mem #N` (see `list mem`), "
+                    "or reply `delete this mem` to my \"Saved as memory\" message."
+                )
+        elif _ID_LIST_RE.fullmatch(target):
+            ids = {int(n) for n in re.findall(r"\d+", target)}
+        else:
+            matches = self.memory_store.find(target)
+            if not matches:
+                return f"🔍 No memory matches `{target}`. Send `list mem` to see what's saved."
+            if len(matches) > 1:
+                options = "\n".join(f"• #{e.id} — {e.preview(120)}" for e in matches[:10])
+                return f"{len(matches)} memories match `{target}`. Which one?\n{options}\nSend `delete mem #N`."
+            ids = {matches[0].id}
 
-        content = kb_file.read_text(encoding="utf-8")
-        sections = re.split(r"(?=\n##\s+Memory\s+Update)", content)
-        if not sections:
-            await message.reply(f"⚠️ No dynamic memory entries found matching `{target}`.")
-            return True
+        removed = self.memory_store.delete(ids)
+        if not removed:
+            missing = ", ".join(f"#{i}" for i in sorted(ids))
+            return f"🔍 No memory {missing}. Send `list mem` to see what's saved."
 
-        entries = sections[1:] if len(sections) > 1 else []
+        for entry in removed:
+            try:
+                self.db.delete_memory_update(entry.text)
+            except Exception as e:
+                logger.warning("Could not delete memory #%d from database: %s", entry.id, e)
 
-        remaining_entries = []
-        removed_entries = []
+        lines = "\n".join(f"> #{e.id} — {e.preview(300)}" for e in removed)
+        if len(removed) == 1:
+            return f"🗑️ Deleted memory #{removed[0].id}\n{lines}\nI won't use it anymore."
+        return f"🗑️ Deleted {len(removed)} memories\n{lines}\nI won't use them anymore."
 
-        target_lower = target.lower()
-        target_keywords = set(re.findall(r"\b[a-z0-9_]+\b", target_lower))
+    def _memory_ids_in_reference(
+        self,
+        referenced: discord.Message | None,
+        bot_user: discord.ClientUser,
+    ) -> set[int]:
+        """Finds which memory a "delete this mem" reply points at."""
+        if referenced is None:
+            return set()
+        content = getattr(referenced, "content", "") or ""
+        if getattr(referenced.author, "id", None) == bot_user.id:
+            ids = {int(n) for n in re.findall(r"Saved as memory #(\d+)", content)}
+            return ids if len(ids) == 1 else set()
+        # Reply to the original message that was saved with "remember this".
+        flat = " ".join(content.split()).lower()
+        if not flat:
+            return set()
+        return {e.id for e in self.memory_store.list() if " ".join(e.text.split()).lower() == flat}
 
-        for entry in entries:
-            entry_lower = entry.lower()
-            phrase_match = target_lower in entry_lower
-            entry_keywords = set(re.findall(r"\b[a-z0-9_]+\b", entry_lower))
-            keyword_overlap = bool(target_keywords and target_keywords.issubset(entry_keywords))
-
-            if phrase_match or keyword_overlap:
-                removed_entries.append(entry.strip())
-            else:
-                remaining_entries.append(entry)
-
-        if not removed_entries:
-            await message.reply(
-                f"🔍 Could not find any dynamic memory entries matching `{target}` in `knowledge/memory_updates.md`."
-            )
-            return True
-
-        now_dt = datetime.now(timezone.utc)
-        timestamp_str = now_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
-
-        base_header = (
-            "# Recur Dynamic Memory & Live Organizer Updates\n"
-            f"*Last Updated: {timestamp_str}*\n\n"
-            "> Official dynamic updates, announcements, and memory additions provided by organizers via #recur-mem-update.\n"
-        )
-        new_content = base_header + "".join(remaining_entries)
-        kb_file.write_text(new_content.strip() + "\n", encoding="utf-8")
-
-        # Delete in SQLite database
-        deleted_db_rows = self.db.delete_memory_update(target)
-
-        # Rebuild FAISS index and reload retriever
-        reindex_details = ""
-        try:
-            if self.indexer:
-                stats = self.indexer.build_index()
-                chunk_count = stats.get("chunk_count", 0)
-                reindex_details = f"Re-indexed {chunk_count} chunks in {stats.get('time_taken', 0.0)}s."
-            if self.retriever:
-                self.retriever.load()
-            logger.info("Removed %d memory entries and reloaded retriever.", len(removed_entries))
-        except Exception as e:
-            logger.error("Failed to re-index after memory removal: %s", e)
-            reindex_details = f"Re-indexing notice: {e}"
-
-        reply_content = (
-            f"🗑️ **Memory Removed Successfully!**\n\n"
-            f"**Target Directive / Term**: `{target}`\n"
-            f"**Removed Entries**: {len(removed_entries)} memory update(s)\n\n"
-            f"✅ **Actions Completed**:\n"
-            f"• Purged from `knowledge/memory_updates.md`\n"
-            f"• Removed from database records ({deleted_db_rows} row(s))\n"
-            f"• Auto-updated vector index & reloaded retriever ({reindex_details or 'Ready'})\n"
-            f"• Recur will no longer use this directive for future queries! 🚀"
-        )
-
-        try:
-            await message.reply(
-                reply_content,
-                allowed_mentions=discord.AllowedMentions(replied_user=True),
-            )
-            return True
-        except Exception as e:
-            logger.error("Failed to send memory removal confirmation: %s", e)
-            return True
+    def _format_memory_list(self) -> str:
+        entries: list[MemoryEntry] = self.memory_store.list()
+        if not entries:
+            return "🧠 No saved memories yet. Add one with `remember <note>`."
+        header = f"🧠 Saved memories ({len(entries)}):"
+        footer = "Delete one with `delete mem #N`."
+        budget = DISCORD_MESSAGE_LIMIT - len(header) - len(footer) - 40
+        lines: list[str] = []
+        for i, e in enumerate(entries):
+            line = f"• #{e.id} — {e.preview(150)}"
+            if sum(len(ln) + 1 for ln in lines) + len(line) > budget:
+                lines.append(f"…and {len(entries) - i} more")
+                break
+            lines.append(line)
+        return "\n".join([header, *lines, footer])
 
     def _is_staff_or_bot(
         self,
@@ -868,7 +664,7 @@ class MessageHandler:
         self,
         message: discord.Message,
         bot_user: discord.ClientUser,
-        situational_context: Optional[str] = None,
+        situational_context: str | None = None,
     ) -> None:
         """Processes an incoming message and executes the response pipeline."""
         # Always ignore bots and self
@@ -915,12 +711,14 @@ class MessageHandler:
         # Check if message is a reply to one of the bot's messages or to another user
         is_reply_to_bot = False
         is_reply_to_other = False
+        ref_msg: discord.Message | None = None
         if message.reference and message.reference.message_id:
             try:
-                ref_msg = message.reference.resolved
-                if not (ref_msg and isinstance(ref_msg, discord.Message)):
-                    ref_msg = await message.channel.fetch_message(message.reference.message_id)
-                if ref_msg and isinstance(ref_msg, discord.Message):
+                resolved = message.reference.resolved
+                if not isinstance(resolved, discord.Message):
+                    resolved = await message.channel.fetch_message(message.reference.message_id)
+                if isinstance(resolved, discord.Message):
+                    ref_msg = resolved
                     if ref_msg.author.id == bot_user.id:
                         is_reply_to_bot = True
                     else:
@@ -932,35 +730,29 @@ class MessageHandler:
         # Resolve member with guild roles
         resolved_member = await self._resolve_member(message.author, message.guild)
 
-        # 1. Team Finding Channel Handler (#find-your-team!)
-        if self._is_team_finding_channel(message.channel):
-            handled = await self._handle_team_finding_message(
-                message=message,
-                bot_user=bot_user,
-                is_mentioned=is_mentioned or is_reply_to_bot,
-            )
-            if handled:
-                return
-
         cleaned_text = self._clean_content(message, bot_user)
         if not cleaned_text:
             return
 
-        # Check if message is in dedicated memory update channel
-        is_mem_channel = self._is_memory_update_channel(message.channel)
-
-        # 1. Check for dynamic memory removal or update requests
-        memory_removal_target = self._extract_memory_removal(cleaned_text, is_memory_channel=is_mem_channel)
-        if memory_removal_target:
-            handled = await self._handle_memory_removal(message, memory_removal_target, bot_user)
-            if handled:
+        # Memory commands only run in #recur-mem-update, so participants in #general or
+        # #ask-mentors can never change what the bot tells everyone.
+        if is_mem_channel:
+            command = self._parse_memory_command(cleaned_text, is_memory_channel=True)
+            if command:
+                await self._run_memory_command(message, command[0], command[1], ref_msg, bot_user)
                 return
-
-        # (e.g. "@recur add this info in your memory ...", or any update in #recur-mem-update)
-        memory_payload = self._extract_memory_update(cleaned_text, is_memory_channel=is_mem_channel)
-        if memory_payload:
-            handled = await self._handle_memory_update(message, memory_payload, bot_user)
-            if handled:
+            if self.classifier.is_chatter(cleaned_text) or has_other_mentions or is_reply_to_other:
+                logger.info("Ignoring chatter in #%s: '%s'", getattr(message.channel, "name", "channel"), cleaned_text)
+                return
+            if _DIRECTIVE_RE.match(cleaned_text) and not cleaned_text.rstrip().endswith("?"):
+                try:
+                    await message.reply(
+                        "Not saved. To save an instruction, start with `remember`, e.g. "
+                        "`remember if anyone asks about X, say Y`.",
+                        allowed_mentions=MEMORY_CARD_MENTIONS,
+                    )
+                except Exception as e:
+                    logger.error("Failed to send memory hint: %s", e)
                 return
 
         # In ambient chat (not directly mentioned), never reply if message is addressing another user
@@ -1002,12 +794,11 @@ class MessageHandler:
                 except Exception as e:
                     logger.debug("Could not inspect immediate channel history: %s", e)
 
-        # 2. Check if message is a teammate recruitment search in an allowed channel (#general, #ask-mentors, etc.)
+        # 2. Check if message is a teammate recruitment search in #general or #ask-mentors
         if not is_mem_channel and self.classifier.is_teammate_search(cleaned_text):
-            if self._is_channel_allowed(message.channel) or is_mentioned or is_reply_to_bot:
-                if not self._is_staff_or_bot(message.author, bot_user, resolved_member=resolved_member):
-                    await self._forward_team_finding_message(message, cleaned_text)
-                    return
+            if not self._is_staff_or_bot(message.author, bot_user, resolved_member=resolved_member):
+                await self._forward_team_finding_message(message, cleaned_text)
+                return
 
         # 3. Author & Role validation: Only reply to participants, ignore bots & staff (except in #recur-mem-update)
         author_allowed, author_reason = self._is_author_allowed(
@@ -1019,16 +810,6 @@ class MessageHandler:
         )
         if not author_allowed:
             logger.info("Ignoring message from %s: %s", message.author, author_reason)
-            return
-
-        # 4. Channel validation: Only reply in 'general' and 'ask-mentors' (unless directly mentioned or in memory update channel)
-        if not self._is_channel_allowed(message.channel) and not (is_mentioned or is_reply_to_bot):
-            channel_name = getattr(message.channel, "name", "DM")
-            logger.info(
-                "Ignoring message in non-allowed channel #%s (allowed: %s)",
-                channel_name,
-                self.config.allowed_channel_names,
-            )
             return
 
         # Get recent channel context for ambiguous classifier decisions
@@ -1110,7 +891,9 @@ class MessageHandler:
                 history=decision_context or history_context,
                 organizer_channel=organizer_channel_str,
                 organizer_tag=organizer_tag_str,
+                channel_name=self._home_channel_name(message.channel),
             )
+            answer = _fit_discord(answer)
             latency = time.time() - start_time
             try:
                 self.db.log_query(
@@ -1145,18 +928,22 @@ class MessageHandler:
 
             # Send reply
             try:
-                await message.reply(answer, mention_author=True)
+                await message.reply(answer, mention_author=True, allowed_mentions=NO_EVERYONE_PING)
                 logger.info("Successfully replied to %s in #%s", message.author, getattr(message.channel, "name", "channel"))
             except discord.Forbidden as e:
                 logger.error("Forbidden: bot lacks Send Messages/View Channel permission in #%s (%s)", getattr(message.channel, "name", "channel"), e)
                 try:
-                    await message.channel.send(f"{message.author.mention} {answer}")
+                    await message.channel.send(
+                        _fit_discord(f"{message.author.mention} {answer}"), allowed_mentions=NO_EVERYONE_PING
+                    )
                 except Exception as e2:
                     logger.error("Fallback send also failed in #%s: %s", getattr(message.channel, "name", "channel"), e2)
             except Exception as e:
                 logger.error("Failed to send reply to message: %s", e)
                 try:
-                    await message.channel.send(f"{message.author.mention} {answer}")
+                    await message.channel.send(
+                        _fit_discord(f"{message.author.mention} {answer}"), allowed_mentions=NO_EVERYONE_PING
+                    )
                 except Exception as e2:
                     logger.error("Fallback send also failed: %s", e2)
 
@@ -1185,11 +972,10 @@ class MessageHandler:
         """
         processed_count = 0
         for guild in guilds:
-            # 1. Identify allowed and team finding channels
-            channels_to_check: list[discord.TextChannel] = []
-            for ch in getattr(guild, "text_channels", []):
-                if self._is_team_finding_channel(ch) or self._is_channel_allowed(ch):
-                    channels_to_check.append(ch)
+            # 1. Only the channels Recur answers in: #general, #ask-mentors, #recur-mem-update
+            channels_to_check: list[discord.TextChannel] = [
+                ch for ch in getattr(guild, "text_channels", []) if self._is_response_channel(ch)
+            ]
 
             # 2. Gather forwarded original message IDs in team finding channel to avoid duplicate forwards
             forwarded_msg_ids: set[int] = set()
@@ -1260,15 +1046,6 @@ class MessageHandler:
                     has_other_mentions = len(other_mentions) > 0
                     is_reply_to_other = bool(msg.reference and msg.reference.message_id)
                     if has_other_mentions or is_reply_to_other or self.classifier.is_addressed_to_other_user(cleaned):
-                        continue
-
-                    # If message is in team finding channel
-                    if self._is_team_finding_channel(ch):
-                        if self.classifier.is_teammate_search(cleaned):
-                            handled = await self._handle_team_finding_message(msg, bot_user)
-                            if handled:
-                                replied_to_by_bot.add(msg.id)
-                                processed_count += 1
                         continue
 
                     # If message in allowed channel (#general, #ask-mentors) is a teammate request

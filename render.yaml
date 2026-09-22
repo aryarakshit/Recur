@@ -23,8 +23,6 @@ services:
         value: "hackathon questions | help desk"
       - key: MAINTAINER_ROLE_ID
         sync: false
-      - key: ALLOWED_CHANNELS
-        value: "general,ask-mentors,ask-mentor,help,recur-mem-update,chat,general-chat,discussion,lounge,welcome,introductions"
       - key: ALLOWED_ROLES
         value: "hacker,hackers,participant,participants"
       - key: EXCLUDED_ROLES

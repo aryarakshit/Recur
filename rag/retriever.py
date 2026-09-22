@@ -12,6 +12,7 @@ import faiss
 import numpy as np
 
 from rag.models import DocumentChunk, RetrievalResult
+from storage.memory_store import MEMORY_FILE_NAME
 
 if TYPE_CHECKING:
     from ai.embeddings import EmbeddingProvider
@@ -97,7 +98,11 @@ class KnowledgeRetriever:
         top_k: int = 4,
         min_score: float = 0.05,
     ) -> list[RetrievalResult]:
-        """Queries the FAISS index using hybrid dense vector + lexical reranking, prioritizing live memory updates."""
+        """Queries the FAISS index using hybrid dense vector + lexical reranking.
+
+        Organizer memory is not ranked here: the generator injects all of it into
+        every prompt.
+        """
         if not self.is_ready():
             logger.warning("Retriever requested query but index is not loaded.")
             return []
@@ -125,17 +130,14 @@ class KnowledgeRetriever:
         else:
             candidate_indices = set()
 
-        # Always include any live memory_updates chunks in evaluation
-        for idx, c in enumerate(self.chunks):
-            if "memory_updates" in c.source.lower():
-                candidate_indices.add(idx)
-
         # Compute hybrid score for all candidates
         scored_candidates: list[tuple[float, DocumentChunk]] = []
         for idx in candidate_indices:
             if idx < 0 or idx >= len(self.chunks):
                 continue
             chunk = self.chunks[idx]
+            if chunk.source == MEMORY_FILE_NAME:  # present only in indexes built before memory moved to the prompt
+                continue
 
             # Vector similarity
             c_vec = self.embedding_provider.embed_query(chunk.text)
@@ -156,16 +158,9 @@ class KnowledgeRetriever:
             else:
                 kw_score = 0.0
 
-            # Live organizer memory boost:
-            # If an organizer wrote a live update in #recur-mem-update, it takes priority
-            is_mem = "memory_updates" in chunk.source.lower()
-            mem_boost = 0.15 if is_mem else 0.0
-            if is_mem and kw_score > 0:
-                mem_boost += 0.20
+            final_score = (0.5 * v_score) + (0.5 * kw_score)
 
-            final_score = (0.5 * v_score) + (0.5 * kw_score) + mem_boost
-
-            if final_score >= min_score or (is_mem and kw_score > 0):
+            if final_score >= min_score:
                 scored_candidates.append((final_score, chunk))
 
         # Sort by final score descending
