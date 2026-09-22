@@ -142,8 +142,7 @@ flowchart TD
 
 ### Layer 5: 4-Step Cognitive Architecture
 - **Active Production Models**:
-  - **Primary Engine**: `gemini-3.8-flash` via Google Gemini.
-  - **Qwen Status**: Configured as an optional fallback, disabled unless `FALLBACK_PROVIDER=groq`.
+  - **Primary and only LLM Engine**: `qwen/qwen3.8-27b` via Groq.
   - **Token Calibration**: `max_output_tokens = 1200` (expanded ceiling allowing complete, un-truncated markdown responses while preserving concise internal cognitive thoughts).
 - **Reasoning Steps**:
   - **`[READ]`**: Ingests the query, recent conversation history, retrieved knowledge base chunks, and live Devfolio updates with attention to emotional tone.
@@ -314,12 +313,9 @@ All configuration is centralized in `config.py` with `.env` overrides. Key varia
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | `DISCORD_TOKEN` | *(required)* | Bot token from Discord Developer Portal |
-| `LLM_PROVIDER` | `gemini` | Primary provider (`groq` or `gemini`) |
-| `GEMINI_API_KEY` | — | Gemini API key for the primary model |
-| `LLM_MODEL` | `gemini-3.8-flash` | Primary model override |
-| `FALLBACK_PROVIDER` | — | Optional fallback provider |
-| `FALLBACK_MODEL` | `qwen/qwen3.8-27b` | Reserved Qwen fallback model |
-| `GROQ_API_KEY` | — | Groq API key used when Qwen fallback is enabled |
+| `LLM_PROVIDER` | `groq` | The only supported LLM provider |
+| `LLM_MODEL` | `qwen/qwen3.8-27b` | Primary Qwen model |
+| `GROQ_API_KEY` | — | Groq API key |
 | `EMBEDDING_MODEL` | `text-embedding-004` | Embedding model for FAISS indexing |
 | `ALLOWED_CHANNELS` | `general,ask-mentors,...` | Comma-separated channel names for ambient replies |
 | `ALLOWED_ROLES` | `hacker,hackers,participant,...` | Roles permitted to receive ambient answers |
@@ -416,7 +412,7 @@ sudo systemctl enable --now hackbot
 ### Render / Hugging Face Spaces
 - Connect GitHub repo → Render creates web service from `render.yaml`
 - Or push Docker image to HF Spaces using `Dockerfile`
-- Set secrets: `DISCORD_TOKEN`, `GROQ_API_KEY`, `GEMINI_API_KEY`
+- Set secrets: `DISCORD_TOKEN`, `GROQ_API_KEY`
 
 ---
 

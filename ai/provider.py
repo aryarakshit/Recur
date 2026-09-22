@@ -447,35 +447,10 @@ class MockProvider(LLMProvider):
 
 
 def get_llm_provider(config: Any) -> LLMProvider:
-    """Factory to instantiate the configured provider and optional fallback."""
-    provider_name = getattr(config, "llm_provider", "gemini").lower()
-
-    if provider_name == "groq":
-        api_key = getattr(config, "groq_api_key", "")
-        if api_key and api_key != "replace_me":
-            logger.info("Instantiating GroqProvider (%s)", config.llm_model)
-            primary: LLMProvider = GroqProvider(api_key=api_key, model=config.llm_model)
-        else:
-            logger.warning("Groq provider configured but GROQ_API_KEY is blank. Using MockProvider.")
-            return MockProvider(provider_name="groq_mock")
-    else:
-        api_key = getattr(config, "gemini_api_key", "")
-        if api_key and api_key != "replace_me":
-            logger.info("Instantiating GeminiProvider (%s)", config.llm_model)
-            primary = GeminiProvider(api_key=api_key, model=config.llm_model)
-        else:
-            logger.warning("Gemini provider configured but GEMINI_API_KEY is blank. Using MockProvider.")
-            return MockProvider(provider_name="gemini_mock")
-
-    fallback_provider = getattr(config, "fallback_provider", "groq").lower()
-    fallback_model = getattr(config, "fallback_model", "qwen/qwen3.8-27b")
-    fallback_key = (
-        getattr(config, "groq_api_key", "")
-        if fallback_provider == "groq"
-        else getattr(config, "gemini_api_key", "")
-    )
-    if fallback_provider == "groq" and fallback_key and fallback_key != "replace_me":
-        fallback = GroqProvider(api_key=fallback_key, model=fallback_model)
-        logger.info("Configured %s as fallback provider (%s)", fallback_provider, fallback_model)
-        return FallbackProvider(primary, fallback)
-    return primary
+    """Factory for the sole supported LLM: Groq-hosted Qwen."""
+    api_key = getattr(config, "groq_api_key", "")
+    if api_key and api_key != "replace_me":
+        logger.info("Instantiating GroqProvider (%s)", config.llm_model)
+        return GroqProvider(api_key=api_key, model=config.llm_model)
+    logger.warning("GROQ_API_KEY is blank. Using MockProvider.")
+    return MockProvider(provider_name="groq_mock")
