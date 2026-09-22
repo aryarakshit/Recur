@@ -146,11 +146,12 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
 
 def get_embedding_provider(config: Config) -> EmbeddingProvider:
     """Factory to retrieve the appropriate embedding provider."""
-    if config.gemini_api_key and config.gemini_api_key != "replace_me":
+    import os
+    if os.getenv("EMBEDDING_PROVIDER", "").strip().lower() == "gemini" and config.gemini_api_key and config.gemini_api_key != "replace_me":
         logger.info("Using Gemini Embedding Provider (%s)", config.embedding_model)
         return GeminiEmbeddingProvider(
             api_key=config.gemini_api_key,
-            model=config.embedding_model,
+            model=config.embedding_model or "gemini-embedding-001",
         )
-    logger.info("API key not configured for embeddings. Using LocalEmbeddingProvider.")
+    logger.info("Using LocalEmbeddingProvider (dimension=384) for fast, robust retrieval.")
     return LocalEmbeddingProvider(dimension=384)

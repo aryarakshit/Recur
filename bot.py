@@ -7,6 +7,7 @@ import os
 import sys
 import threading
 import time
+import asyncio
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import discord
 from discord.ext import commands, tasks
@@ -250,6 +251,9 @@ def main() -> None:
 
     bot = commands.Bot(command_prefix="!", intents=intents, allowed_mentions=allowed_mentions)
     _app_state["bot"] = bot
+    startup_catchup_done = False
+    commands_synced = False
+    restart_delay = 5.0
 
     # Setup slash commands
     setup_commands(
@@ -264,16 +268,20 @@ def main() -> None:
 
     @bot.event
     async def on_ready() -> None:
+        nonlocal commands_synced, startup_catchup_done, restart_delay
+        restart_delay = 5.0
         _app_state["status"] = "online"
         logger.info("Recur is online.")
         logger.info("Logged in as %s (ID: %s)", bot.user.name, bot.user.id)
         guilds = [f"'{g.name}' (ID: {g.id}, Members: {g.member_count})" for g in bot.guilds]
         logger.info("Connected to %d guild(s): %s", len(guilds), ", ".join(guilds) if guilds else "None")
-        try:
-            synced = await bot.tree.sync()
-            logger.info("Synced %d slash commands across Discord.", len(synced))
-        except Exception as e:
-            logger.error("Failed to sync slash commands: %s", e)
+        if not commands_synced:
+            try:
+                synced = await bot.tree.sync()
+                commands_synced = True
+                logger.info("Synced %d slash commands across Discord.", len(synced))
+            except Exception as e:
+                logger.error("Failed to sync slash commands: %s", e)
 
         activity = discord.Activity(
             type=discord.ActivityType.listening,
@@ -283,16 +291,18 @@ def main() -> None:
         logger.info("Bot is ready and listening for hackathon queries!")
 
         # Catch up on any unanswered messages while bot was offline / restarting
-        try:
-            logger.info("Scanning for any unanswered messages in allowed channels...")
-            caught_up = await message_handler.catch_up_unanswered_messages(
-                bot_user=bot.user,
-                guilds=bot.guilds,
-                limit_per_channel=25,
-            )
-            logger.info("Catch-up completed: %d unanswered message(s) processed.", caught_up)
-        except Exception as e:
-            logger.error("Error during startup catch-up: %s", e)
+        if not startup_catchup_done:
+            try:
+                logger.info("Scanning for any unanswered messages in allowed channels...")
+                caught_up = await message_handler.catch_up_unanswered_messages(
+                    bot_user=bot.user,
+                    guilds=bot.guilds,
+                    limit_per_channel=25,
+                )
+                startup_catchup_done = True
+                logger.info("Catch-up completed: %d unanswered message(s) processed.", caught_up)
+            except Exception as e:
+                logger.error("Error during startup catch-up: %s", e)
 
         # Start periodic catch-up task to prevent unanswered queries
         if not periodic_catch_up.is_running():
@@ -348,41 +358,45 @@ def main() -> None:
         except Exception as e:
             logger.error("Error processing message '%s': %s", getattr(message, "content", ""), e, exc_info=True)
 
-    # Run the bot with built-in reconnection
-    try:
-        bot.run(config.discord_token, reconnect=True)
-    except discord.errors.LoginFailure as e:
-        _app_state["last_error"] = f"LoginFailure: {e}"
-        _app_state["status"] = "login_failure"
-        logger.critical("Fatal: Invalid DISCORD_TOKEN provided. Please check environment variables: %s", e)
-        time.sleep(30)
-        sys.exit(1)
-    except discord.errors.HTTPException as e:
-        _app_state["last_error"] = f"HTTPException {getattr(e, 'status', 'unknown')}: {e}"
-        _app_state["status"] = "rate_limited" if getattr(e, "status", None) == 429 else "http_error"
-        logger.error("Discord HTTP Exception: %s", e)
-        if getattr(e, "status", None) == 429:
-            retry_after = getattr(e, "retry_after", None)
-            delay = max(int(retry_after), 300) if retry_after else 300
-            logger.warning(
-                "Discord Cloudflare Rate Limit (HTTP 429, code 0). Backing off for %ds (5m) to let IP block expire...",
-                delay,
-            )
-            time.sleep(delay)
-        else:
-            time.sleep(15)
-    except Exception as e:
-        _app_state["last_error"] = f"{type(e).__name__}: {e}"
-        _app_state["status"] = "error"
-        logger.error("Unexpected error in Discord bot runner: %s", e)
-        time.sleep(15)
+    async def run_forever() -> None:
+        nonlocal restart_delay
+        while True:
+            try:
+                await bot.start(config.discord_token, reconnect=True)
+                logger.warning("Discord client stopped; retrying without replacing the process.")
+            except discord.errors.LoginFailure as e:
+                _app_state["last_error"] = f"LoginFailure: {e}"
+                _app_state["status"] = "login_failure"
+                logger.critical("Fatal: Invalid DISCORD_TOKEN provided. Please check environment variables: %s", e)
+                raise
+            except discord.errors.HTTPException as e:
+                _app_state["last_error"] = f"HTTPException {getattr(e, 'status', 'unknown')}: {e}"
+                _app_state["status"] = "rate_limited" if getattr(e, "status", None) == 429 else "http_error"
+                logger.error("Discord HTTP Exception: %s", e)
+                if getattr(e, "status", None) == 429:
+                    retry_after = getattr(e, "retry_after", None)
+                    restart_delay = max(float(retry_after or 0), 300.0, restart_delay)
+                    logger.warning(
+                        "Discord Cloudflare Rate Limit (HTTP 429, code 0). Backing off for %.0fs before retrying...",
+                        restart_delay,
+                    )
+                else:
+                    restart_delay = min(max(restart_delay, 15.0) * 2, 900.0)
+            except Exception as e:
+                _app_state["last_error"] = f"{type(e).__name__}: {e}"
+                _app_state["status"] = "error"
+                restart_delay = min(max(restart_delay, 15.0) * 2, 900.0)
+                logger.error("Unexpected error in Discord bot runner: %s", e, exc_info=True)
+            finally:
+                if not bot.is_closed():
+                    await bot.close()
 
-    # Re-exec process after backoff to reconnect cleanly
-    logger.warning("Bot runner stopped. Re-executing process now...")
+            await asyncio.sleep(restart_delay)
+
     try:
-        os.execv(sys.executable, [sys.executable] + sys.argv)
-    except Exception as e:
-        logger.error("Failed to re-exec process: %s", e)
+        asyncio.run(run_forever())
+    except discord.errors.LoginFailure:
+        time.sleep(30)
         sys.exit(1)
 
 

@@ -147,9 +147,9 @@ class LLMProvider(abc.ABC):
 class GeminiProvider(LLMProvider):
     """Google Gemini LLM provider using the modern google-genai SDK."""
 
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash") -> None:
+    def __init__(self, api_key: str, model: str = "gemini-3.8-flash") -> None:
         self.api_key = api_key
-        self.model = model or "gemini-2.5-flash"
+        self.model = model or "gemini-3.8-flash"
         from google import genai
         self.client = genai.Client(api_key=api_key)
 
@@ -160,9 +160,9 @@ class GeminiProvider(LLMProvider):
         if context:
             prompt += f"\nRecent channel context:\n{context}"
 
-        def _call_gemini():
+        def _call_gemini(m: str):
             return self.client.models.generate_content(
-                model=self.model,
+                model=m,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     temperature=0.0,
@@ -171,7 +171,16 @@ class GeminiProvider(LLMProvider):
             )
 
         try:
-            response = await asyncio.to_thread(_call_gemini)
+            response = await asyncio.to_thread(_call_gemini, self.model)
+        except Exception as e:
+            logger.warning("Gemini classifier primary model (%s) failed: %s. Trying fallback model gemini-3.1-flash-lite...", self.model, e)
+            try:
+                response = await asyncio.to_thread(_call_gemini, "gemini-3.1-flash-lite")
+            except Exception as e2:
+                logger.error("Gemini classification error: %s", e2)
+                return {"should_reply": False, "confidence": 0.0, "reason": f"API error: {e2}"}
+
+        try:
             raw = (response.text or "").strip()
             first_line = raw.splitlines()[0].strip() if raw else ""
             is_yes = first_line.upper().startswith("YES") or "YES" in first_line.upper().split(":")[0]
@@ -182,8 +191,8 @@ class GeminiProvider(LLMProvider):
                 "reason": reason or ("YES" if is_yes else "NO"),
             }
         except Exception as e:
-            logger.error("Gemini classification error: %s", e)
-            return {"should_reply": False, "confidence": 0.0, "reason": f"API error: {e}"}
+            logger.error("Gemini classification parse error: %s", e)
+            return {"should_reply": False, "confidence": 0.0, "reason": f"Parse error: {e}"}
 
     async def answer(
         self,
@@ -206,9 +215,9 @@ class GeminiProvider(LLMProvider):
             user_content += f"Recent Conversation History:\n{history}\n\n"
         user_content += f"Participant Question:\n{question}"
 
-        def _call_gemini():
+        def _call_gemini(m: str):
             return self.client.models.generate_content(
-                model=self.model,
+                model=m,
                 contents=user_content,
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
@@ -218,11 +227,17 @@ class GeminiProvider(LLMProvider):
             )
 
         try:
-            response = await asyncio.to_thread(_call_gemini)
+            response = await asyncio.to_thread(_call_gemini, self.model)
             return response.text.strip()
         except Exception as e:
-            logger.error("Gemini answer generation error: %s", e)
-            return "AI service is temporarily unavailable. Please contact a maintainer."
+            logger.warning("Gemini primary model (%s) failed: %s. Trying fallback model gemini-3.1-flash-lite...", self.model, e)
+            try:
+                fallback_m = "gemini-3.1-flash-lite" if self.model != "gemini-3.1-flash-lite" else "gemini-3.5-flash"
+                response = await asyncio.to_thread(_call_gemini, fallback_m)
+                return response.text.strip()
+            except Exception as e2:
+                logger.error("Gemini fallback answer generation error: %s", e2)
+                return "AI service is temporarily unavailable. Please contact a maintainer."
 
 
 class GroqProvider(LLMProvider):

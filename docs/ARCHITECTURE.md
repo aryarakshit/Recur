@@ -87,7 +87,7 @@ flowchart TD
 - **`bot.py`**: Initializes `commands.Bot` with `intents.message_content = True`. Privileged gateway `intents.members` is intentionally set to `False` to prevent `PrivilegedIntentsRequired` gateway connection crashes when Server Members Intent is not toggled in developer portal.
 - **Health Check & Keep-Alive**: Runs an internal multi-threaded HTTP server (`0.0.0.0:7860`) returning `200 OK` for continuous uptime on Render/Hugging Face Spaces and a 9-minute self-ping loop preventing container sleep/idle on free tiers.
 - **Background Scanner**: Uses `discord.ext.tasks.loop(minutes=5)` to scan `#general`, `#ask-mentors`, and `#recur-mem-update` for unanswered questions or missed teammate searches.
-- **Auto-Reconnection Loop**: Discord connection wrapped in infinite retry loop with exponential backoff (5s → 60s max) handling `GatewayNotFound`, `ConnectionClosed`, and `LoginFailure`.
+- **Auto-Reconnection Loop**: Discord connection runs in an in-process infinite retry loop with exponential backoff (5s → 15m max). HTTP 429 responses honor Discord's retry interval with a 5-minute minimum cooldown, while slash-command synchronization and startup catch-up are performed only once per process to avoid multiplying API traffic during recovery. Invalid credentials remain fatal.
 
 ### Layer 2: Role, Permission & Peer Filtering Layer
 - **`_resolve_member()`**: Resolves raw `discord.User` instances from history into full `discord.Member` objects via guild cache or Discord HTTP REST API (`guild.fetch_member()`), backed by a 300-second in-memory TTL cache. This bypasses the need for privileged gateway intents entirely.

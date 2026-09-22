@@ -149,7 +149,7 @@ class Config:
             if self.llm_provider == "groq":
                 self.llm_model = "qwen/qwen3.8-27b"
             else:
-                self.llm_model = "gemini-2.5-flash"
+                self.llm_model = "gemini-3.8-flash"
 
         # Ensure directories exist
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
