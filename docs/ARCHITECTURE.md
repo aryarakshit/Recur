@@ -142,9 +142,9 @@ flowchart TD
 
 ### Layer 5: 4-Step Cognitive Architecture
 - **Active Production Models**:
-  - **Primary Engine**: `qwen/qwen3.8-27b` (Qwen 27B on Groq LPU with ~2s sub-second inference).
-  - **Automated Failover Engine**: `openai/gpt-oss-20b` (instant backup if primary encounters rate limit).
-  - **Token Calibration**: `max_tokens = 900` (expanded ceiling allowing complete, un-truncated markdown responses while preserving concise internal cognitive thoughts).
+  - **Primary Engine**: `gemini-3.8-flash` (Google Gemini with modern `google-genai` SDK) / `qwen/qwen3.8-27b` on Groq.
+  - **Automated Failover Engine**: `gemini-3.1-flash-lite` (instant backup if Google Gemini encounters 503 high-demand spikes) and Groq fallback.
+  - **Token Calibration**: `max_output_tokens = 1200` (expanded ceiling allowing complete, un-truncated markdown responses while preserving concise internal cognitive thoughts).
 - **Reasoning Steps**:
   - **`[READ]`**: Ingests the query, recent conversation history, retrieved knowledge base chunks, and live Devfolio updates with attention to emotional tone.
   - **`[UNDERSTAND]`**: Identifies participant anxiety (e.g. deadline panic, submission cutoff confusion, PPT slide limits, working prototype vs idea phase, Devfolio team formation).
