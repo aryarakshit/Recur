@@ -17,10 +17,16 @@ services:
         sync: false
       - key: LLM_MODEL
         value: gemini-3.8-flash
+      - key: FALLBACK_PROVIDER
+        value: groq
+      - key: FALLBACK_MODEL
+        value: qwen/qwen3.8-27b
       - key: GROQ_API_KEY
         sync: false
       - key: MAINTAINER_MENTION
         value: "@Core Member or @Volunteer"
+      - key: BOT_ACTIVITY
+        value: "hackathon questions | help desk"
       - key: MAINTAINER_ROLE_ID
         sync: false
       - key: ALLOWED_CHANNELS
@@ -33,4 +39,3 @@ services:
         value: "true"
       - key: TEAM_FINDING_CHANNELS
         value: "find-your-team,find-your-team!"
-

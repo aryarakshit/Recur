@@ -28,8 +28,8 @@ The bot acts as an official, hallucination-free hackathon assistant that reads m
   2. *Fast Heuristic & Noise Filter*: Keyword recognition for hackathon inquiries, immediate silence on memes, greetings, bot commands, and casual chat.
   3. *Cheap LLM Evaluation*: Fast single-token classification (`YES` or `NO`) for ambiguous messages.
 - **Multi-Provider LLM Abstraction**:
-  - Primary: **Google Gemini API** (`gemini-2.5-flash` / `text-embedding-004`).
-  - Alternative: **Groq API** (e.g. `qwen/qwen3.8-27b`, `llama-3.3-70b-versatile`) with automatic rate-limit token bounding.
+  - Primary: **Google Gemini API** (`gemini-3.8-flash` / `text-embedding-004`).
+  - Fallback: **Groq API** using Qwen (`qwen/qwen3.8-27b`) when Gemini is unavailable.
   - Offline Mock Mode: Runs locally when keys are blank.
 - **Vector Search (FAISS)**: Fast, normalized cosine similarity retrieval over chunked documents with calibrated similarity filtering. Supports both Markdown and PDF documents.
 - **Lightweight Sliding Memory**: Retains the last 6 conversation turns per user/channel in SQLite so follow-up inquiries maintain context without polluting authoritative answers.
@@ -199,16 +199,18 @@ ALLOWED_CHANNEL_IDS=
 # ==============================================================================
 # LLM PROVIDER CONFIGURATION
 # ==============================================================================
-# Options: 'gemini' or 'groq'
-LLM_PROVIDER=groq
+# Primary provider: 'gemini' (Groq is configured as fallback)
+LLM_PROVIDER=gemini
 
 # Google Gemini API Settings
-GEMINI_API_KEY=
+GEMINI_API_KEY=AIza_your_gemini_key_here
+LLM_MODEL=gemini-3.8-flash
 EMBEDDING_MODEL=text-embedding-004
 
 # Groq API Settings (Fast on-demand inference)
 GROQ_API_KEY=gsk_your_groq_key_here
-LLM_MODEL=qwen/qwen3.8-27b
+FALLBACK_PROVIDER=groq
+FALLBACK_MODEL=qwen/qwen3.8-27b
 ```
 
 > **Dynamic Role Tagging**: When a role ID (`CORE_MEMBER_ROLE_ID` / `VOLUNTEER_ROLE_ID`) is provided, or when the bot finds roles named `Core Member` or `Volunteer` in your server, it will dynamically ping `<@&ROLE_ID>` so organizers receive instant notifications.
@@ -297,12 +299,14 @@ Under the **Environment Variables** section, add:
 | Key | Value | Description |
 |---|---|---|
 | `DISCORD_TOKEN` | `MTU1MDc...` | Your bot token from Discord Developer Portal |
-| `LLM_PROVIDER` | `groq` | Active LLM provider (`groq` or `gemini`) |
-| `GROQ_API_KEY` | `gsk_...` | Your Groq API key |
-| `LLM_MODEL` | `qwen/qwen3.8-27b` | LLM model name |
+| `LLM_PROVIDER` | `gemini` | Primary LLM provider (`gemini` or `groq`) |
+| `GEMINI_API_KEY` | `AIzaSy...` | Google Gemini API key |
+| `LLM_MODEL` | `gemini-3.8-flash` | Primary model name |
+| `FALLBACK_PROVIDER` | `groq` | Provider used when the primary fails |
+| `FALLBACK_MODEL` | `qwen/qwen3.8-27b` | Fallback model name |
+| `GROQ_API_KEY` | `gsk_...` | Groq API key for the fallback |
 | `MAINTAINER_MENTION` | `@Core Member or @Volunteer` | Mention tag used in fallback responses |
 | `MAINTAINER_ROLE_ID` | `123456789...` | *(Optional)* Discord role ID to ping maintainers |
-| `GEMINI_API_KEY` | `AIzaSy...` | *(Optional)* Gemini API key if using Gemini |
 | `PYTHON_VERSION` | `3.11.9` | Locks Python version for binary wheel stability |
 
 #### 4. Deploy & Verify

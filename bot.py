@@ -283,9 +283,10 @@ def main() -> None:
             except Exception as e:
                 logger.error("Failed to sync slash commands: %s", e)
 
+        activity_name = os.getenv("BOT_ACTIVITY", "hackathon questions | help desk")
         activity = discord.Activity(
             type=discord.ActivityType.listening,
-            name=f"hackathon questions | {config.organizer_channel_name}",
+            name=activity_name,
         )
         await bot.change_presence(activity=activity)
         logger.info("Bot is ready and listening for hackathon queries!")

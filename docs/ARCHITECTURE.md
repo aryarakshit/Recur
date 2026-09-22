@@ -142,7 +142,7 @@ flowchart TD
 
 ### Layer 5: 4-Step Cognitive Architecture
 - **Active Production Models**:
-  - **Primary Engine**: `gemini-3.8-flash` (Google Gemini with modern `google-genai` SDK) / `qwen/qwen3.8-27b` on Groq.
+  - **Primary Engine**: `gemini-3.8-flash` (Google Gemini with modern `google-genai` SDK), with `qwen/qwen3.8-27b` on Groq as fallback.
   - **Automated Failover Engine**: `gemini-3.1-flash-lite` (instant backup if Google Gemini encounters 503 high-demand spikes) and Groq fallback.
   - **Token Calibration**: `max_output_tokens = 1200` (expanded ceiling allowing complete, un-truncated markdown responses while preserving concise internal cognitive thoughts).
 - **Reasoning Steps**:
@@ -315,9 +315,11 @@ All configuration is centralized in `config.py` with `.env` overrides. Key varia
 | :--- | :--- | :--- |
 | `DISCORD_TOKEN` | *(required)* | Bot token from Discord Developer Portal |
 | `LLM_PROVIDER` | `gemini` | `groq` or `gemini` (auto-detected from API keys) |
-| `GROQ_API_KEY` | — | Groq API key for primary LLM (`qwen/qwen3.8-27b`) |
-| `GEMINI_API_KEY` | — | Google Gemini API key for fallback/primary |
-| `LLM_MODEL` | provider-specific | Override model (e.g. `qwen/qwen3.8-27b`, `gemini-2.5-flash`) |
+| `GROQ_API_KEY` | — | Groq API key for the Qwen fallback (`qwen/qwen3.8-27b`) |
+| `GEMINI_API_KEY` | — | Google Gemini API key for the primary model |
+| `LLM_MODEL` | `gemini-3.8-flash` | Primary model override |
+| `FALLBACK_PROVIDER` | `groq` | Provider used when the primary fails |
+| `FALLBACK_MODEL` | `qwen/qwen3.8-27b` | Fallback model override |
 | `EMBEDDING_MODEL` | `text-embedding-004` | Embedding model for FAISS indexing |
 | `ALLOWED_CHANNELS` | `general,ask-mentors,...` | Comma-separated channel names for ambient replies |
 | `ALLOWED_ROLES` | `hacker,hackers,participant,...` | Roles permitted to receive ambient answers |
