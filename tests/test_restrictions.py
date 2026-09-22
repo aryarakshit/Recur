@@ -53,6 +53,19 @@ def test_channel_allowed(message_handler):
         assert message_handler._is_channel_allowed(ch) is False, f"Channel {name} should be rejected"
 
 
+def test_response_channel_is_strict(message_handler):
+    for name in ["general", "ask-mentors", "recur-mem-update"]:
+        ch = MagicMock()
+        ch.name = name
+        ch.parent = None
+        assert message_handler._is_response_channel(ch) is True
+    for name in ["announcements", "random", "find-your-team"]:
+        ch = MagicMock()
+        ch.name = name
+        ch.parent = None
+        assert message_handler._is_response_channel(ch) is False
+
+
 def test_author_allowed(message_handler):
     bot_user = MagicMock()
     bot_user.id = 999999
@@ -677,7 +690,6 @@ async def test_ignores_admin_messages_and_mentions_in_ambient_and_catchup():
     count = await handler.catch_up_unanswered_messages(bot_user, [guild], limit_per_channel=20)
     assert count == 0
     msg.reply.assert_not_called()
-
 
 
 

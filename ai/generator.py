@@ -124,7 +124,8 @@ class AnswerGenerator:
         if re.search(r"\b(?:how\s+are\s+you|how's\s+it\s+going|how\s+are\s+you\s+doing|what's\s+up|wassup)\b", clean_q):
             return "I'm doing well, thank you! Ready to assist you with any questions or guidelines for RECURSIVE 2026. What would you like to know?", False
 
-        # Check if query is asking about deadlines, extensions, PPT submissions, or live updates
+        # Live organizer sources are checked for every answer so dates, rules,
+        # and other hard facts reflect the latest Devfolio/website updates.
         is_time_or_deadline_query = any(
             w in clean_q for w in [
                 "deadline", "extend", "extended", "extension", "date", "dates", "ppt", "submission",
@@ -149,7 +150,7 @@ class AnswerGenerator:
 
         if not relevant_results:
             # If question might have answer on Devfolio or website, try live sync
-            if self.live_sync and is_time_or_deadline_query:
+            if self.live_sync:
                 logger.info("Query '%s' triggered live web fetch from Devfolio and recursiveacm.in", question)
                 live_text = self.live_sync.get_live_context(force=True)
                 if live_text:
@@ -177,8 +178,9 @@ class AnswerGenerator:
             header = f"[Source {i}: {chunk.source} | Section: {chunk.section}]"
             context_parts.append(f"{header}\n{chunk.text}")
 
-        # If query asks about deadlines, extensions, or dates, append live web updates to context
-        if self.live_sync and is_time_or_deadline_query:
+        # Append current official web status before asking the model for any
+        # factual answer. LiveWebSync handles caching and refresh intervals.
+        if self.live_sync:
             try:
                 live_text = self.live_sync.get_live_context(force=False)
                 if live_text:

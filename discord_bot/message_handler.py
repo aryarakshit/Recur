@@ -149,7 +149,7 @@ class MessageHandler:
         return False
 
     def _is_channel_allowed(self, channel: discord.abc.Messageable) -> bool:
-        """Verifies if the message was sent in an allowed channel (e.g. #general, #ask-mentors, or #recur-mem-update)."""
+        """Verifies that replies are limited to general, ask-mentors, or memory updates."""
         if self._is_memory_update_channel(channel):
             return True
 
@@ -173,6 +173,26 @@ class MessageHandler:
                 clean_al = re.sub(r"[^a-z0-9\-]", "", al.lower()).strip("-")
                 if clean == clean_al or clean_al in clean:
                     return True
+        return False
+
+    def _is_response_channel(self, channel: Any) -> bool:
+        """Return whether the bot is allowed to process messages in this channel."""
+        return self._is_memory_update_channel(channel) or self._channel_matches(
+            channel, {"general", "ask-mentors"}
+        )
+
+    def _channel_matches(self, channel: Any, names: set[str]) -> bool:
+        raw_names = []
+        name = getattr(channel, "name", None)
+        if isinstance(name, str):
+            raw_names.append(name.lower())
+        parent = getattr(channel, "parent", None)
+        if parent and isinstance(getattr(parent, "name", None), str):
+            raw_names.append(parent.name.lower())
+        for raw in raw_names:
+            clean = re.sub(r"[^a-z0-9\-]", "", raw).strip("-")
+            if clean in {re.sub(r"[^a-z0-9\-]", "", n).strip("-") for n in names}:
+                return True
         return False
 
     def _is_team_finding_channel(self, channel: Any) -> bool:
@@ -433,9 +453,10 @@ class MessageHandler:
         ]
         if is_memory_channel:
             patterns.extend([
-                r"^(?:@?recur\s+)?(?:please\s+)?mem(?:ory)?\s+update\s*[:\-–—.]*\s*(.+)$",
+                r"^(?:@?recur\s+)?(?:please\s+)?mem(?:ory)?\s+update\s*[:\-–—./]?\s+(.+)$",
                 r"^(?:@?recur\s+)?(?:please\s+)?r(?:e)?member\s*[:\-–—./]+\s*(.+)$",
                 r"^(?:@?recur\s+)?(?:please\s+)?remember\s*[:\-–—./]+\s*(.+)$",
+                r"^(?:@?recur\s+)?(?:please\s+)?update\s+mem(?:ory)?\s*[:\-–—./]?\s+(.+)$",
             ])
 
         for pat in patterns:
@@ -573,9 +594,9 @@ class MessageHandler:
         ]
         if is_memory_channel:
             patterns.extend([
-                r"^(?:@?recur\s+)?(?:please\s+)?delete\s+mem(?:ory)?\s*[:\-–—.]*\s*(.+)$",
-                r"^(?:@?recur\s+)?(?:please\s+)?mem(?:ory)?\s+delete\s*[:\-–—.]*\s*(.+)$",
-                r"^(?:@?recur\s+)?(?:please\s+)?mem(?:ory)?\s+remove\s*[:\-–—.]*\s*(.+)$",
+                r"^(?:@?recur\s+)?(?:please\s+)?delete\s+mem(?:ory)?\s*[:\-–—./]?\s+(.+)$",
+                r"^(?:@?recur\s+)?(?:please\s+)?mem(?:ory)?\s+delete\s*[:\-–—./]?\s+(.+)$",
+                r"^(?:@?recur\s+)?(?:please\s+)?mem(?:ory)?\s+remove\s*[:\-–—./]?\s+(.+)$",
             ])
 
         for pat in patterns:
@@ -886,6 +907,10 @@ class MessageHandler:
         # Check if other users are mentioned (excluding bot)
         other_mentions = [m for m in message.mentions if m.id != bot_user.id]
         has_other_mentions = len(other_mentions) > 0
+
+        if not self._is_response_channel(message.channel):
+            logger.info("Ignoring message in non-response channel #%s", getattr(message.channel, "name", "channel"))
+            return
 
         # Check if message is a reply to one of the bot's messages or to another user
         is_reply_to_bot = False

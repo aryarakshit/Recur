@@ -28,8 +28,8 @@ The bot acts as an official, hallucination-free hackathon assistant that reads m
   2. *Fast Heuristic & Noise Filter*: Keyword recognition for hackathon inquiries, immediate silence on memes, greetings, bot commands, and casual chat.
   3. *Cheap LLM Evaluation*: Fast single-token classification (`YES` or `NO`) for ambiguous messages.
 - **Multi-Provider LLM Abstraction**:
-  - Primary: **Groq API** using Qwen (`qwen/qwen3.8-27b`).
-  - Gemini is retained in configuration but disabled as a fallback for now.
+  - Primary: **Google Gemini API** (`gemini-3.8-flash`).
+  - Optional fallback: **Groq API** using Qwen (`qwen/qwen3.8-27b`).
   - Offline Mock Mode: Runs locally when keys are blank.
 - **Vector Search (FAISS)**: Fast, normalized cosine similarity retrieval over chunked documents with calibrated similarity filtering. Supports both Markdown and PDF documents.
 - **Lightweight Sliding Memory**: Retains the last 6 conversation turns per user/channel in SQLite so follow-up inquiries maintain context without polluting authoritative answers.
@@ -199,18 +199,18 @@ ALLOWED_CHANNEL_IDS=
 # ==============================================================================
 # LLM PROVIDER CONFIGURATION
 # ==============================================================================
-# Primary provider: Groq-hosted Qwen (Gemini is currently disabled)
-LLM_PROVIDER=groq
+# Primary provider: Google Gemini
+LLM_PROVIDER=gemini
 
 # Google Gemini API Settings
-GEMINI_API_KEY=
-LLM_MODEL=qwen/qwen3.8-27b
+GEMINI_API_KEY=AIza_your_gemini_key_here
+LLM_MODEL=gemini-3.8-flash
 EMBEDDING_MODEL=text-embedding-004
 
 # Groq API Settings (Fast on-demand inference)
 GROQ_API_KEY=gsk_your_groq_key_here
 FALLBACK_PROVIDER=
-FALLBACK_MODEL=gemini-3.8-flash
+FALLBACK_MODEL=qwen/qwen3.8-27b
 ```
 
 > **Dynamic Role Tagging**: When a role ID (`CORE_MEMBER_ROLE_ID` / `VOLUNTEER_ROLE_ID`) is provided, or when the bot finds roles named `Core Member` or `Volunteer` in your server, it will dynamically ping `<@&ROLE_ID>` so organizers receive instant notifications.
@@ -300,11 +300,11 @@ Under the **Environment Variables** section, add:
 |---|---|---|
 | `DISCORD_TOKEN` | `MTU1MDc...` | Your bot token from Discord Developer Portal |
 | `LLM_PROVIDER` | `groq` | Primary LLM provider (`groq` or `gemini`) |
-| `GEMINI_API_KEY` | — | Gemini API key, currently unused |
-| `LLM_MODEL` | `qwen/qwen3.8-27b` | Primary model name |
-| `FALLBACK_PROVIDER` | — | Empty to keep fallback disabled |
-| `FALLBACK_MODEL` | `gemini-3.8-flash` | Reserved Gemini fallback model |
-| `GROQ_API_KEY` | `gsk_...` | Groq API key for Qwen |
+| `GEMINI_API_KEY` | `AIzaSy...` | Gemini API key for the primary model |
+| `LLM_MODEL` | `gemini-3.8-flash` | Primary model name |
+| `FALLBACK_PROVIDER` | — | Optional fallback provider |
+| `FALLBACK_MODEL` | `qwen/qwen3.8-27b` | Reserved Qwen fallback model |
+| `GROQ_API_KEY` | `gsk_...` | Groq API key when Qwen fallback is enabled |
 | `MAINTAINER_MENTION` | `@Core Member or @Volunteer` | Mention tag used in fallback responses |
 | `MAINTAINER_ROLE_ID` | `123456789...` | *(Optional)* Discord role ID to ping maintainers |
 | `PYTHON_VERSION` | `3.11.9` | Locks Python version for binary wheel stability |

@@ -110,12 +110,12 @@ class Config:
 
     # LLM settings
     llm_provider: str = field(
-        default_factory=lambda: os.getenv("LLM_PROVIDER", "groq").strip().lower()
+        default_factory=lambda: os.getenv("LLM_PROVIDER", "gemini").strip().lower()
     )
     gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", "").strip())
     groq_api_key: str = field(default_factory=lambda: os.getenv("GROQ_API_KEY", "").strip())
     llm_model: str = field(
-        default_factory=lambda: os.getenv("LLM_MODEL", "qwen/qwen3.8-27b").strip()
+        default_factory=lambda: os.getenv("LLM_MODEL", "gemini-3.8-flash").strip()
     )
     fallback_provider: str = field(
         default_factory=lambda: os.getenv("FALLBACK_PROVIDER", "").strip().lower()

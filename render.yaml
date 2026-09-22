@@ -12,15 +12,15 @@ services:
       - key: DISCORD_TOKEN
         sync: false
       - key: LLM_PROVIDER
-        value: groq
+        value: gemini
       - key: GEMINI_API_KEY
         sync: false
       - key: LLM_MODEL
-        value: qwen/qwen3.8-27b
+        value: gemini-3.8-flash
       - key: FALLBACK_PROVIDER
         value: ""
       - key: FALLBACK_MODEL
-        value: gemini-3.8-flash
+        value: qwen/qwen3.8-27b
       - key: GROQ_API_KEY
         sync: false
       - key: MAINTAINER_MENTION
