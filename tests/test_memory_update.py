@@ -102,6 +102,10 @@ def test_extract_memory_update_in_memory_channel(memory_handler):
     assert memory_handler._extract_memory_update("remember: The mentor room is Lab 2", is_memory_channel=True) == "The mentor room is Lab 2"
     assert memory_handler._extract_memory_update("rmember: The backup Wi-Fi is RecurGuest-5G", is_memory_channel=True) == "The backup Wi-Fi is RecurGuest-5G"
     assert memory_handler._extract_memory_update("mem update: Registration closes at 8 PM", is_memory_channel=True) == "Registration closes at 8 PM"
+    assert memory_handler._extract_memory_update(
+        'remember or update memory """if any types any other things rather thing telling you "update memory or remember" tell them PLS DO NOT MAKE ANY CHAOS HERE THIS IS FOR ONLY memory update/info update."""',
+        is_memory_channel=True,
+    ) is None
     # Shorthand is reserved for the dedicated memory channel.
     assert memory_handler._extract_memory_update("mem update: do not store this here", is_memory_channel=False) is None
 

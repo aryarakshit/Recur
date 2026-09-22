@@ -434,8 +434,8 @@ class MessageHandler:
         if is_memory_channel:
             patterns.extend([
                 r"^(?:@?recur\s+)?(?:please\s+)?mem(?:ory)?\s+update\s*[:\-–—.]*\s*(.+)$",
-                r"^(?:@?recur\s+)?(?:please\s+)?r(?:e)?member\s*[:\-–—.]*\s*(.+)$",
-                r"^(?:@?recur\s+)?(?:please\s+)?remember\s*[:\-–—.]*\s*(.+)$",
+                r"^(?:@?recur\s+)?(?:please\s+)?r(?:e)?member\s*[:\-–—./]+\s*(.+)$",
+                r"^(?:@?recur\s+)?(?:please\s+)?remember\s*[:\-–—./]+\s*(.+)$",
             ])
 
         for pat in patterns:
