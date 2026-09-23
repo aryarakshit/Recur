@@ -168,6 +168,25 @@ class AnswerGenerator:
 
         # Direct Important Links Fast-Path Resolution (PPT template, Devfolio, parent website, Discord)
         is_hinglish = any(re.search(rf"\b{hw}\b", clean_q) for hw in ["bhai", "yaar", "ka", "ki", "ke", "kaha", "kahan", "do", "de", "milega", "milegi", "chahiye", "batao"])
+        # Check if multiple links are requested
+        multi_links: list[tuple[str, str]] = []
+        if re.search(r"\b(?:ppt|presentation|slide|slides|deck)\b", clean_q) and re.search(r"\b(?:template|format|sample)\b", clean_q):
+            multi_links.append(("Idea PPT Template (Google Slides)", "<https://docs.google.com/presentation/d/1Heaa2d_DUVpFmt4Oo2dKZWUOvAVtXQrn1OnsHCBEWEQ/copy>"))
+        if re.search(r"\b(?:devfolio|apply|registration)\b", clean_q):
+            multi_links.append(("Devfolio Registration Portal", "<https://recursiveacm.devfolio.co>"))
+        if re.search(r"\b(?:parent\s+website|website|official\s+site|site)\b", clean_q):
+            multi_links.append(("Official Website", "<https://recursiveacm.in>"))
+        if re.search(r"\b(?:discord|server)\b", clean_q):
+            multi_links.append(("Official Discord Server", "<https://discord.gg/SMYB7tJQf>"))
+        if re.search(r"\b(?:location|venue|address|campus|map|maps)\b", clean_q) and "link" in clean_q:
+            multi_links.append(("GNIT Campus Google Maps", "<https://www.google.com/maps/search/?api=1&query=22.695132695547784,88.37877130486947>"))
+
+        if len(multi_links) > 1 and any(w in clean_q for w in ["link", "links", "url", "urls", "share", "give", "kaha", "kahan", "do", "de"]):
+            lines = [f"• **{label}**: {url}" for label, url in multi_links]
+            if is_hinglish:
+                return "Yeh rahe official links:\n" + "\n".join(lines), False
+            return "Here are the official links:\n" + "\n".join(lines), False
+
         # 1. PPT Template Link
         if re.search(r"\b(?:ppt|presentation|slide|slides|deck)\b", clean_q) and re.search(r"\b(?:template|format|sample)\b", clean_q) and (re.search(r"\b(?:link|url|kaha|kahan|download|get|give|provide|do|de|milega|milegi)\b", clean_q) or clean_q.endswith("?")):
             if is_hinglish:
