@@ -140,13 +140,15 @@ class Config:
             elif self.gemini_api_key and not self.groq_api_key:
                 self.llm_provider = "gemini"
 
-        # Default models based on provider if not specified
+        # Default models based on provider if not specified or incompatible
         if not self.llm_model:
             if self.llm_provider == "groq":
                 self.llm_model = "qwen/qwen3.8-27b"
             else:
                 self.llm_provider = "groq"
                 self.llm_model = "qwen/qwen3.8-27b"
+        elif self.llm_provider == "groq" and "gemini" in self.llm_model.lower():
+            self.llm_model = "qwen/qwen3.8-27b"
 
         # Ensure directories exist
         self.database_path.parent.mkdir(parents=True, exist_ok=True)

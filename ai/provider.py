@@ -218,9 +218,13 @@ class GeminiProvider(LLMProvider):
 class GroqProvider(LLMProvider):
     """Groq LLM provider using the groq SDK."""
 
-    def __init__(self, api_key: str, model: str = "llama-3.3-70b-versatile") -> None:
+    def __init__(self, api_key: str, model: str = "qwen/qwen3.8-27b") -> None:
         self.api_key = api_key
-        self.model = model or "llama-3.3-70b-versatile"
+        # Ensure model is valid for Groq and not an inadvertent Google Gemini model name
+        if not model or "gemini" in model.lower():
+            logger.warning("Invalid model '%s' for GroqProvider. Defaulting to 'qwen/qwen3.8-27b'.", model)
+            model = "qwen/qwen3.8-27b"
+        self.model = model
         from groq import AsyncGroq
         self.client = AsyncGroq(api_key=api_key)
 
@@ -255,6 +259,10 @@ class GroqProvider(LLMProvider):
                     logger.warning("Groq classification rate limit (attempt %d): %s. Backing off 1.5s...", attempt + 1, e)
                     await asyncio.sleep(1.5)
                     continue
+                if ("404" in err_str or "model_not_found" in err_str or "does not exist" in err_str) and attempt == 0:
+                    logger.warning("Groq model '%s' not found (%s). Retrying with 'qwen/qwen3.8-27b'...", self.model, e)
+                    self.model = "qwen/qwen3.8-27b"
+                    continue
                 logger.error("Groq classification error: %s", e)
                 return {"should_reply": False, "confidence": 0.0, "reason": f"API error: {e}"}
         return {"should_reply": False, "confidence": 0.0, "reason": "Rate limited"}
@@ -279,8 +287,11 @@ class GroqProvider(LLMProvider):
         user_content += f"Participant Question:\n{question}"
 
         # Attempt primary model (max_tokens=700 stays safely below Groq free tier 1000 OTPM limit)
-        models_to_try = [self.model]
-        if "gpt-oss-20b" not in self.model:
+        primary = self.model if "gemini" not in self.model.lower() else "qwen/qwen3.8-27b"
+        models_to_try = [primary]
+        if "qwen" not in primary.lower():
+            models_to_try.append("qwen/qwen3.8-27b")
+        if "gpt-oss-20b" not in primary:
             models_to_try.append("openai/gpt-oss-20b")
 
         for model_name in models_to_try:
@@ -430,7 +441,10 @@ def get_llm_provider(config: Any) -> LLMProvider:
     """Factory for the sole supported LLM: Groq-hosted Qwen."""
     api_key = getattr(config, "groq_api_key", "")
     if api_key and api_key != "replace_me":
-        logger.info("Instantiating GroqProvider (%s)", config.llm_model)
-        return GroqProvider(api_key=api_key, model=config.llm_model)
+        model = getattr(config, "llm_model", "qwen/qwen3.8-27b")
+        if not model or "gemini" in model.lower():
+            model = "qwen/qwen3.8-27b"
+        logger.info("Instantiating GroqProvider (%s)", model)
+        return GroqProvider(api_key=api_key, model=model)
     logger.warning("GROQ_API_KEY is blank. Using MockProvider.")
     return MockProvider(provider_name="groq_mock")

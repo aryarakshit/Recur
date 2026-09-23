@@ -67,6 +67,19 @@ def test_factory_returns_mock_when_keys_blank():
     assert isinstance(provider, MockProvider)
 
 
+def test_factory_sanitizes_gemini_model_for_groq():
+    from ai.provider import GroqProvider
+    cfg = Config()
+    cfg.groq_api_key = "dummy_key_for_test"
+    cfg.llm_provider = "groq"
+    cfg.llm_model = "gemini-3.8-flash"
+
+    provider = get_llm_provider(cfg)
+    assert isinstance(provider, GroqProvider)
+    assert provider.model == "qwen/qwen3.8-27b"
+
+
+
 @pytest.mark.asyncio
 async def test_generator_refuses_off_topic_query():
     from ai.classifier import MessageClassifier
