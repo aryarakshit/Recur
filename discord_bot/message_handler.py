@@ -40,7 +40,9 @@ _ADD_SHORTHAND = (
     r"(?:auto\s+)?update\s+(?:your\s+)?mem(?:ory)?"
     r"|mem(?:ory)?\s+(?:update|add|save)"
     r"|(?:add|save)\s+(?:this\s+)?(?:to|in|into)\s+mem(?:ory)?"
+    r"|save\s+(?:this\s+)?(?:in|to)\s+(?:your\s+)?memory"
     rf"|(?:remember|rmember|remeber|rember)(?:\s+that|{_THIS})?"
+    r"|yaad\s+(?:rakhna|rakho)(?:\s+ki)?"
 )
 _DELETE_TRIGGERS = (
     r"remove\s+(?:this\s+)?(?:info\s+|information\s+)?(?:from|in)\s+(?:your\s+)?mem(?:ory)?"
@@ -49,7 +51,9 @@ _DELETE_TRIGGERS = (
     r"|forget(?:\s+(?:this|about))?"
 )
 _DELETE_SHORTHAND = (
-    r"(?:delete|del|remove|erase)\s+(?:from\s+)?(?:this\s+|that\s+|the\s+)?mem(?:ory)?"
+    r"(?:delete|del|remove|erase|clear)\s+(?:from\s+)?(?:this\s+|that\s+|the\s+)?mem(?:ory)?"
+    r"|(?:delete|del|remove)\s+(?:karo\s+)?mem(?:ory)?"
+    r"|(?:delete|del|remove|erase)(?=\s+#?\d+)"
     r"|mem(?:ory)?\s+(?:delete|del|remove)"
 )
 
@@ -58,7 +62,7 @@ def _command_re(triggers: str) -> re.Pattern[str]:
     trigger = f"(?:{triggers})"
     # Triggers may be chained, e.g. "remember or update memory: ..." or "update memory/ remember this: ...".
     return re.compile(
-        rf"{_LEAD}{trigger}(?:\s*(?:or|and|/|,|&)\s*{trigger})*\b(?P<sep>[\s:;.\-–—/>|]*)(?P<arg>.*)$",
+        rf"{_LEAD}{trigger}(?:\s*(?:or|and|/|,|&)\s*{trigger})*(?:\b|(?=#))(?P<sep>[\s:;.\-–—/>|]*)(?P<arg>.*)$",
         re.IGNORECASE | re.DOTALL,
     )
 

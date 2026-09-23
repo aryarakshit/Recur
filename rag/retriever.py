@@ -33,14 +33,23 @@ COMMON_STOPWORDS = {
     "t", "than", "that", "the", "their", "theirs", "them", "themselves", "then", "there", "these", "they", "this", "those", "through", "to", "too",
     "under", "until", "up", "very",
     "was", "we", "were", "what", "when", "where", "which", "while", "who", "whom", "why", "will", "with", "would",
-    "you", "your", "yours", "yourself", "yourselves", "recur"
+    "you", "your", "yours", "yourself", "yourselves", "recur",
+    # Hinglish stopwords to avoid penalizing lexical matching
+    "kya", "hai", "hain", "hoga", "hogi", "honge", "kaise", "kaha", "kahan", "kab",
+    "kitna", "kitne", "kitni", "kaun", "bhai", "bro", "yaar", "ko", "se", "me", "mein",
+    "ki", "ke", "ka", "kar", "kare", "karein", "karna", "wala", "wali", "wale",
+    "batao", "bata", "bataiye", "mujhe", "mera", "meri", "mere", "hum", "hume",
+    "humara", "humare", "aap", "tum", "bhi", "toh", "aur", "ya", "nahi", "na",
+    "lekin", "par", "pe", "sirf", "hota", "hoti", "hote", "sakta", "sakte", "sakti",
+    "milega", "milegi", "milenge", "chahiye", "raha", "rahe", "rahi", "tha", "the", "thi",
 }
 
 
 def normalize_query_text(query: str) -> str:
     """Normalizes conversational queries and common hackathon typos."""
     clean = query.strip()
-    clean = re.sub(r"^(?:(?:so|hey|hi|yo|ok|okay)\s+)?(?:@?recur\s*[,:]?\s*)", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"^(?:(?:so|hey|hi|yo|ok|okay|bhai|bro|yaar)\s+)?(?:@?recur\s*[,:]?\s*)", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"^(?:bhai|bro|yaar)\s*[,:]?\s*", "", clean, flags=re.IGNORECASE)
     clean = re.sub(r"\bpricepool\b", "prize pool", clean, flags=re.IGNORECASE)
     clean = re.sub(r"\bprice\s+pool\b", "prize pool", clean, flags=re.IGNORECASE)
     clean = re.sub(r"\bprices\b", "prizes", clean, flags=re.IGNORECASE)

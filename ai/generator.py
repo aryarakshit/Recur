@@ -149,16 +149,48 @@ class AnswerGenerator:
 
         # Check identity questions
         clean_q = question.strip().lower()
-        if re.search(r"\b(who\s+are\s+you|what\s+are\s+you|who\s+is\s+recur|what\s+is\s+recur|tell\s+me\s+about\s+yourself)\b", clean_q):
+        if re.search(r"\b(who\s+are\s+you|what\s+are\s+you|who\s+is\s+recur|what\s+is\s+recur|tell\s+me\s+about\s+yourself|tu\s+kaun\s+hai|kaun\s+ho\s+tum|aap\s+kaun\s+hai|recur\s+kaun\s+hai)\b", clean_q):
+            if any(w in clean_q for w in ["tu", "kaun", "tum", "aap", "kya hai"]):
+                return "Main Recur hoon, RECURSIVE 2026 hackathon ka official AI assistant. Main hackathon ke rules, dates, PPT template aur guidance me aapki help kar sakta hoon!", False
             return IDENTITY_REPLY, False
 
-        # Check friendly greetings (e.g. "heloow recur", "hello recur", "hi recur", "hey recur", "gm", "good morning")
-        if re.search(r"^(?:hi|hello|helo|helow|heloow|hey|sup|greetings|gm|good\s+(?:morning|afternoon|evening))\s*(?:recur|bot)?\s*[!.]*$", clean_q):
+        # Check friendly greetings (e.g. "heloow recur", "hello recur", "hi recur", "hey recur", "gm", "good morning", "namaste")
+        if re.search(r"^(?:hi|hello|helo|helow|heloow|hey|sup|greetings|gm|namaste|pranam|good\s+(?:morning|afternoon|evening))\s*(?:recur|bot)?\s*[!.]*$", clean_q):
+            if any(w in clean_q for w in ["namaste", "pranam"]):
+                return "Namaste! Main Recur hoon, RECURSIVE 2026 ka official AI assistant. Main aapki kya madad kar sakta hoon?", False
             return "Hello! I am Recur, the official AI assistant for RECURSIVE 2026. How can I help you with the hackathon today?", False
 
-        # Check conversational check-ins (e.g. "how are you", "how are you doing", "what's up")
-        if re.search(r"\b(?:how\s+are\s+you|how's\s+it\s+going|how\s+are\s+you\s+doing|what's\s+up|wassup)\b", clean_q):
+        # Check conversational check-ins (e.g. "how are you", "how are you doing", "what's up", "kaise ho")
+        if re.search(r"\b(?:how\s+are\s+you|how's\s+it\s+going|how\s+are\s+you\s+doing|what's\s+up|wassup|kaise\s+ho|kya\s+haal\s+hai|kya\s+chal\s+raha\s+hai)\b", clean_q):
+            if any(w in clean_q for w in ["kaise", "haal", "chal raha"]):
+                return "Main badhiya hoon, shukriya! RECURSIVE 2026 hackathon ki details aur queries ke liye tayar hoon. Aapko kya jaankari chahiye?", False
             return "I'm doing well, thank you! Ready to assist you with any questions or guidelines for RECURSIVE 2026. What would you like to know?", False
+
+        # Direct Important Links Fast-Path Resolution (PPT template, Devfolio, parent website, Discord)
+        is_hinglish = any(re.search(rf"\b{hw}\b", clean_q) for hw in ["bhai", "yaar", "ka", "ki", "ke", "kaha", "kahan", "do", "de", "milega", "milegi", "chahiye", "batao"])
+        # 1. PPT Template Link
+        if re.search(r"\b(?:ppt|presentation|slide|slides|deck)\b", clean_q) and re.search(r"\b(?:template|format|sample)\b", clean_q) and (re.search(r"\b(?:link|url|kaha|kahan|download|get|give|provide|do|de|milega|milegi)\b", clean_q) or clean_q.endswith("?")):
+            if is_hinglish:
+                return "Official Idea PPT template (Google Slides copy link): <https://docs.google.com/presentation/d/1Heaa2d_DUVpFmt4Oo2dKZWUOvAVtXQrn1OnsHCBEWEQ/copy>. Isme mandatory 8-slide deck structure follow karein aur export karte waqt Slide 9 (Guidelines) remove karke PDF me Devfolio par upload karein.", False
+            return "Here is the official Idea PPT Template (Google Slides): <https://docs.google.com/presentation/d/1Heaa2d_DUVpFmt4Oo2dKZWUOvAVtXQrn1OnsHCBEWEQ/copy>. Follow the mandatory 8-slide deck structure, remove Slide 9 (Guidelines), and export as PDF for your Devfolio submission.", False
+
+        # 2. Devfolio Registration Link
+        if re.search(r"\b(?:devfolio|registration|apply)\b", clean_q) and re.search(r"\b(?:link|url|portal|kaha|kahan|do|de|milega)\b", clean_q) and not any(kw in clean_q for kw in ["deadline", "when", "date", "extend", "last date", "close", "fee", "cost"]):
+            if is_hinglish:
+                return "Devfolio application aur registration portal ka official link yeh raha: <https://recursiveacm.devfolio.co>.", False
+            return "Here is the official Devfolio registration and application portal: <https://recursiveacm.devfolio.co>.", False
+
+        # 3. Official Website Link
+        if re.search(r"\b(?:parent\s+website|website|official\s+site|site)\b", clean_q) and re.search(r"\b(?:link|url|kaha|kahan|do|de|milega)\b", clean_q) and not any(kw in clean_q for kw in ["devfolio", "discord", "ppt"]):
+            if is_hinglish:
+                return "Hackathon ki official parent website ka link: <https://recursiveacm.in>.", False
+            return "Here is the official parent website for the hackathon: <https://recursiveacm.in>.", False
+
+        # 4. Discord Server Link
+        if re.search(r"\b(?:discord|server)\b", clean_q) and re.search(r"\b(?:link|url|invite|join|kaha|kahan|do|de)\b", clean_q):
+            if is_hinglish:
+                return "Official Discord server join karne ka link: <https://discord.gg/SMYB7tJQf>.", False
+            return "Here is the official Discord server invite link: <https://discord.gg/SMYB7tJQf>.", False
 
         # Organizer memory from #recur-mem-update goes into every prompt, so a saved note
         # applies until an organizer deletes it, however the question is worded.

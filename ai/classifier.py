@@ -51,6 +51,9 @@ HACKATHON_KEYWORDS = {
     # Questions & Help
     "help", "doubt", "doubts", "query", "queries", "question", "questions", "info", "information",
     "details", "guidelines", "criteria",
+    # Hinglish & Hindi Terms
+    "madad", "sawaal", "sawal", "shuru", "khatam", "paisa", "paise", "inaam", "jankari", "jaankari",
+    "tarikh", "taarikh",
 }
 
 # Casual chatter patterns to ignore
@@ -286,11 +289,16 @@ class MessageClassifier:
             return False
 
         # Identity questions directed at the bot
-        if re.search(r"\b(who\s+are\s+you|what\s+are\s+you|who\s+is\s+recur|what\s+is\s+recur|tell\s+me\s+about\s+yourself|introduce\s+yourself)\b", clean):
+        if re.search(r"\b(who\s+are\s+you|what\s+are\s+you|who\s+is\s+recur|what\s+is\s+recur|tell\s+me\s+about\s+yourself|introduce\s+yourself|tu\s+kaun\s+hai|kaun\s+ho\s+tum|aap\s+kaun\s+hai|recur\s+kaun\s+hai)\b", clean):
             return True
 
         # Check explicit resource/link request phrases
-        if any(phrase in clean for phrase in ["website link", "site link", "official website", "hackathon link", "registration link", "apply link", "template link", "ppt link", "slides link", "discord link"]):
+        if any(phrase in clean for phrase in [
+            "website link", "site link", "official website", "hackathon link", "registration link",
+            "apply link", "template link", "ppt link", "slides link", "discord link", "maps link",
+            "venue link", "location link", "ppt template", "presentation template", "template ka link",
+            "ppt ka link", "link do", "link de", "link share",
+        ]):
             return True
 
         # Extract words and check keyword overlap
@@ -304,7 +312,13 @@ class MessageClassifier:
         is_question = "?" in clean or any(clean.startswith(w) for w in [
             "what", "when", "where", "how", "can", "is", "are", "who", "which",
             "give", "send", "share", "provide", "tell", "will", "does", "do",
-            "should", "could", "may"
+            "should", "could", "may",
+            # Hinglish question starters
+            "kya", "kaise", "kaha", "kahan", "kab", "kitna", "kitne", "kitni", "kaun",
+            "batao", "bata", "bataiye", "bhai",
+        ]) or any(re.search(rf"\b{qw}\b", clean) for qw in [
+            "kya", "kaise", "kaha", "kahan", "kab", "kitna", "kitne", "kitni", "kaun",
+            "batao", "bata", "bataiye", "bata do",
         ])
 
         # If very short message with 0 keywords, clearly chatter ONLY IF not formatted as a question
